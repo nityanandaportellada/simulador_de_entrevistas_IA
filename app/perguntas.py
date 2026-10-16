@@ -4,8 +4,6 @@ perguntas.py
 Módulo responsável pelo gerenciamento das perguntas
 do Simulador de Entrevistas.
 
-Versão: 0.2
-
 Responsabilidades:
 
 - cadastrar perguntas;
@@ -17,31 +15,23 @@ Responsabilidades:
 - excluir perguntas quando permitido;
 - filtrar perguntas por tipo de entrevista;
 - filtrar perguntas por competência;
-- validar integridade entre:
-    tipo de entrevista;
-    competência;
-    pergunta.
+- filtrar perguntas por área técnica;
+- filtrar perguntas por subárea técnica;
+- validar vínculos com tipos de entrevista;
+- validar vínculos com competências;
+- validar vínculos com áreas técnicas;
+- validar vínculos com subáreas técnicas;
+- preparar a seleção de perguntas técnicas para entrevistas.
 
-REGRAS DE INTEGRIDADE:
+Regras de perguntas técnicas:
 
-1. Uma nova pergunta somente pode utilizar
-   um tipo de entrevista existente e ativo.
-
-2. Uma nova pergunta somente pode utilizar
-   uma competência existente e ativa.
-
-3. Uma pergunta não pode ser reativada caso
-   o tipo de entrevista esteja inativo.
-
-4. Uma pergunta não pode ser reativada caso
-   a competência esteja inativa.
-
-5. Ao listar somente perguntas ativas,
-   também são considerados os estados do
-   tipo de entrevista e da competência.
-
-6. Perguntas já utilizadas em entrevistas
-   não podem ser excluídas fisicamente.
+- quando o tipo de entrevista utiliza área técnica,
+  área e subárea são obrigatórias;
+- a área precisa existir e estar ativa;
+- a subárea precisa existir e estar ativa;
+- a subárea precisa pertencer à área;
+- tipos que não utilizam área técnica não podem
+  possuir área ou subárea vinculada.
 
 O acesso ao banco de dados é realizado através
 do módulo database.py.
@@ -56,6 +46,7 @@ try:
 
     from .models import Pergunta
 
+
 except ImportError:
 
     from database import conectar_banco
@@ -64,142 +55,534 @@ except ImportError:
 
 
 # ============================================================
-# VALIDAR ID DA PERGUNTA
+# VALIDAR ID
 # ============================================================
 
-def _validar_pergunta_id(
-    pergunta_id: int
+def _validar_id(
+    valor: int | None,
+    campo: str
 ) -> None:
     """
-    Valida o ID de uma pergunta.
+    Valida identificadores numéricos.
     """
 
-    if not isinstance(
-        pergunta_id,
-        int
+    if (
+        valor is None
+        or valor <= 0
     ):
 
         raise ValueError(
-            "O ID da pergunta deve ser um número inteiro."
+            f"{campo} inválido."
         )
 
 
-    if pergunta_id <= 0:
+# ============================================================
+# VALIDAR CAMPOS BÁSICOS
+# ============================================================
+
+def _validar_campos_pergunta(
+    pergunta: Pergunta
+) -> None:
+    """
+    Valida os campos básicos da pergunta.
+
+    As referências ao banco são verificadas
+    separadamente.
+    """
+
+    # --------------------------------------------------------
+    # TEXTO
+    # --------------------------------------------------------
+
+    if pergunta.texto is None:
 
         raise ValueError(
-            "O ID da pergunta deve ser maior que zero."
+            "O texto da pergunta é obrigatório."
+        )
+
+
+    texto = pergunta.texto.strip()
+
+
+    if not texto:
+
+        raise ValueError(
+            "O texto da pergunta não pode estar vazio."
+        )
+
+
+    if len(texto) < 3:
+
+        raise ValueError(
+            "O texto da pergunta deve possuir "
+            "pelo menos 3 caracteres."
+        )
+
+
+    # --------------------------------------------------------
+    # TIPO DE ENTREVISTA
+    # --------------------------------------------------------
+
+    _validar_id(
+        pergunta.tipo_entrevista_id,
+        "Tipo de entrevista"
+    )
+
+
+    # --------------------------------------------------------
+    # COMPETÊNCIA
+    # --------------------------------------------------------
+
+    _validar_id(
+        pergunta.competencia_id,
+        "Competência"
+    )
+
+
+    # --------------------------------------------------------
+    # PESO
+    # --------------------------------------------------------
+
+    if pergunta.peso is None:
+
+        raise ValueError(
+            "O peso da pergunta é obrigatório."
+        )
+
+
+    if pergunta.peso <= 0:
+
+        raise ValueError(
+            "O peso da pergunta deve ser maior "
+            "que zero."
+        )
+
+
+    # --------------------------------------------------------
+    # ORDEM
+    # --------------------------------------------------------
+
+    if (
+        pergunta.ordem is not None
+        and pergunta.ordem <= 0
+    ):
+
+        raise ValueError(
+            "A ordem da pergunta deve ser "
+            "maior que zero."
         )
 
 
 # ============================================================
-# VALIDAR TIPO DE ENTREVISTA
+# BUSCAR TIPO DE ENTREVISTA
 # ============================================================
 
-def _validar_tipo_entrevista_ativo(
+def _buscar_tipo_entrevista(
+    cursor: sqlite3.Cursor,
     tipo_entrevista_id: int
-) -> None:
+):
     """
-    Verifica se o tipo de entrevista existe
-    e está ativo.
+    Busca o tipo de entrevista dentro da
+    conexão atualmente utilizada.
     """
 
-    if not isinstance(
-        tipo_entrevista_id,
-        int
-    ):
+    cursor.execute(
+        """
+        SELECT
 
-        raise ValueError(
-            "O tipo de entrevista informado é inválido."
+            id,
+            nome,
+            descricao,
+            ativo,
+            usa_area_tecnica
+
+        FROM tipos_entrevista
+
+        WHERE id = ?
+        """,
+        (
+            tipo_entrevista_id,
         )
+    )
 
 
-    if tipo_entrevista_id <= 0:
-
-        raise ValueError(
-            "O tipo de entrevista informado é inválido."
-        )
-
-
-    conexao = conectar_banco()
-
-    cursor = conexao.cursor()
-
-
-    try:
-
-        cursor.execute(
-            """
-            SELECT
-                id,
-                ativo
-
-            FROM tipos_entrevista
-
-            WHERE id = ?
-            """,
-            (
-                tipo_entrevista_id,
-            )
-        )
-
-
-        registro = cursor.fetchone()
-
-
-        if registro is None:
-
-            raise ValueError(
-                "O tipo de entrevista informado "
-                "não foi encontrado."
-            )
-
-
-        if not bool(
-            registro["ativo"]
-        ):
-
-            raise ValueError(
-                "O tipo de entrevista informado está inativo."
-            )
-
-
-    finally:
-
-        conexao.close()
+    return cursor.fetchone()
 
 
 # ============================================================
-# VALIDAR COMPETÊNCIA
+# BUSCAR COMPETÊNCIA
 # ============================================================
 
-def _validar_competencia_ativa(
+def _buscar_competencia(
+    cursor: sqlite3.Cursor,
     competencia_id: int
+):
+    """
+    Busca uma competência dentro da
+    conexão atual.
+    """
+
+    cursor.execute(
+        """
+        SELECT
+
+            id,
+            nome,
+            descricao,
+            ativa
+
+        FROM competencias
+
+        WHERE id = ?
+        """,
+        (
+            competencia_id,
+        )
+    )
+
+
+    return cursor.fetchone()
+
+
+# ============================================================
+# BUSCAR ÁREA
+# ============================================================
+
+def _buscar_area_tecnica(
+    cursor: sqlite3.Cursor,
+    area_tecnica_id: int
+):
+    """
+    Busca uma área técnica.
+    """
+
+    cursor.execute(
+        """
+        SELECT
+
+            id,
+            nome,
+            descricao,
+            ativo,
+            ordem
+
+        FROM areas_tecnicas
+
+        WHERE id = ?
+        """,
+        (
+            area_tecnica_id,
+        )
+    )
+
+
+    return cursor.fetchone()
+
+
+# ============================================================
+# BUSCAR SUBÁREA
+# ============================================================
+
+def _buscar_subarea_tecnica(
+    cursor: sqlite3.Cursor,
+    subarea_tecnica_id: int
+):
+    """
+    Busca uma subárea técnica.
+    """
+
+    cursor.execute(
+        """
+        SELECT
+
+            id,
+            area_tecnica_id,
+            nome,
+            descricao,
+            eh_geral,
+            ativo,
+            ordem
+
+        FROM subareas_tecnicas
+
+        WHERE id = ?
+        """,
+        (
+            subarea_tecnica_id,
+        )
+    )
+
+
+    return cursor.fetchone()
+
+
+# ============================================================
+# VALIDAR REFERÊNCIAS
+# ============================================================
+
+def _validar_referencias_pergunta(
+    cursor: sqlite3.Cursor,
+    pergunta: Pergunta,
+    exigir_ativos: bool = True
 ) -> None:
     """
-    Verifica se a competência existe
-    e está ativa.
+    Valida todos os relacionamentos utilizados
+    por uma pergunta.
 
-    IMPORTANTE:
+    Quando exigir_ativos for True:
 
-    Na tabela competencias, o campo de status
-    se chama 'ativa'.
+    - tipo de entrevista precisa estar ativo;
+    - competência precisa estar ativa;
+    - área precisa estar ativa;
+    - subárea precisa estar ativa.
     """
 
-    if not isinstance(
-        competencia_id,
-        int
+    # ========================================================
+    # TIPO DE ENTREVISTA
+    # ========================================================
+
+    tipo = _buscar_tipo_entrevista(
+
+        cursor,
+
+        pergunta.tipo_entrevista_id
+
+    )
+
+
+    if tipo is None:
+
+        raise ValueError(
+            "Tipo de entrevista não encontrado."
+        )
+
+
+    if (
+        exigir_ativos
+        and not bool(
+            tipo[
+                "ativo"
+            ]
+        )
     ):
 
         raise ValueError(
-            "A competência informada é inválida."
+            "O tipo de entrevista informado "
+            "está inativo."
         )
 
 
-    if competencia_id <= 0:
+    # ========================================================
+    # COMPETÊNCIA
+    # ========================================================
+
+    competencia = _buscar_competencia(
+
+        cursor,
+
+        pergunta.competencia_id
+
+    )
+
+
+    if competencia is None:
 
         raise ValueError(
-            "A competência informada é inválida."
+            "Competência não encontrada."
         )
+
+
+    if (
+        exigir_ativos
+        and not bool(
+            competencia[
+                "ativa"
+            ]
+        )
+    ):
+
+        raise ValueError(
+            "A competência informada está inativa."
+        )
+
+
+    # ========================================================
+    # TIPO UTILIZA ÁREA TÉCNICA?
+    # ========================================================
+
+    usa_area_tecnica = bool(
+        tipo[
+            "usa_area_tecnica"
+        ]
+    )
+
+
+    # ========================================================
+    # TIPO TÉCNICO
+    # ========================================================
+
+    if usa_area_tecnica:
+
+        # ----------------------------------------------------
+        # ÁREA OBRIGATÓRIA
+        # ----------------------------------------------------
+
+        if pergunta.area_tecnica_id is None:
+
+            raise ValueError(
+                "A área técnica é obrigatória "
+                "para este tipo de entrevista."
+            )
+
+
+        _validar_id(
+            pergunta.area_tecnica_id,
+            "Área técnica"
+        )
+
+
+        # ----------------------------------------------------
+        # SUBÁREA OBRIGATÓRIA
+        # ----------------------------------------------------
+
+        if pergunta.subarea_tecnica_id is None:
+
+            raise ValueError(
+                "A subárea técnica é obrigatória "
+                "para este tipo de entrevista."
+            )
+
+
+        _validar_id(
+            pergunta.subarea_tecnica_id,
+            "Subárea técnica"
+        )
+
+
+        # ----------------------------------------------------
+        # VALIDAR ÁREA
+        # ----------------------------------------------------
+
+        area = _buscar_area_tecnica(
+
+            cursor,
+
+            pergunta.area_tecnica_id
+
+        )
+
+
+        if area is None:
+
+            raise ValueError(
+                "Área técnica não encontrada."
+            )
+
+
+        if (
+            exigir_ativos
+            and not bool(
+                area[
+                    "ativo"
+                ]
+            )
+        ):
+
+            raise ValueError(
+                "A área técnica informada "
+                "está inativa."
+            )
+
+
+        # ----------------------------------------------------
+        # VALIDAR SUBÁREA
+        # ----------------------------------------------------
+
+        subarea = _buscar_subarea_tecnica(
+
+            cursor,
+
+            pergunta.subarea_tecnica_id
+
+        )
+
+
+        if subarea is None:
+
+            raise ValueError(
+                "Subárea técnica não encontrada."
+            )
+
+
+        # ----------------------------------------------------
+        # VALIDAR VÍNCULO ÁREA / SUBÁREA
+        # ----------------------------------------------------
+
+        if (
+            subarea[
+                "area_tecnica_id"
+            ]
+            != pergunta.area_tecnica_id
+        ):
+
+            raise ValueError(
+                "A subárea informada não pertence "
+                "à área técnica selecionada."
+            )
+
+
+        if (
+            exigir_ativos
+            and not bool(
+                subarea[
+                    "ativo"
+                ]
+            )
+        ):
+
+            raise ValueError(
+                "A subárea técnica informada "
+                "está inativa."
+            )
+
+
+    # ========================================================
+    # TIPO NÃO UTILIZA ÁREA
+    # ========================================================
+
+    else:
+
+        if (
+            pergunta.area_tecnica_id
+            is not None
+
+            or
+
+            pergunta.subarea_tecnica_id
+            is not None
+        ):
+
+            raise ValueError(
+                "Este tipo de entrevista não utiliza "
+                "área ou subárea técnica."
+            )
+
+
+# ============================================================
+# VALIDAR PERGUNTA
+# ============================================================
+
+def validar_pergunta(
+    pergunta: Pergunta
+) -> None:
+    """
+    Executa todas as validações necessárias
+    para uma pergunta.
+    """
+
+    _validar_campos_pergunta(
+        pergunta
+    )
 
 
     conexao = conectar_banco()
@@ -209,39 +592,15 @@ def _validar_competencia_ativa(
 
     try:
 
-        cursor.execute(
-            """
-            SELECT
-                id,
-                ativa
+        _validar_referencias_pergunta(
 
-            FROM competencias
+            cursor,
 
-            WHERE id = ?
-            """,
-            (
-                competencia_id,
-            )
+            pergunta,
+
+            exigir_ativos=True
+
         )
-
-
-        registro = cursor.fetchone()
-
-
-        if registro is None:
-
-            raise ValueError(
-                "A competência informada não foi encontrada."
-            )
-
-
-        if not bool(
-            registro["ativa"]
-        ):
-
-            raise ValueError(
-                "A competência informada está inativa."
-            )
 
 
     finally:
@@ -257,15 +616,17 @@ def cadastrar_pergunta(
     pergunta: Pergunta
 ) -> int:
     """
-    Cadastra uma nova pergunta no banco de dados.
+    Cadastra uma nova pergunta.
 
-    O tipo de entrevista e a competência
-    precisam existir e estar ativos.
+    Para perguntas técnicas:
 
-    Retorna o ID da pergunta cadastrada.
+    - área é obrigatória;
+    - subárea é obrigatória;
+    - ambas precisam estar ativas;
+    - a subárea precisa pertencer à área.
     """
 
-    validar_pergunta(
+    _validar_campos_pergunta(
         pergunta
     )
 
@@ -279,20 +640,63 @@ def cadastrar_pergunta(
 
         cursor.execute(
             """
+            BEGIN IMMEDIATE
+            """
+        )
+
+
+        _validar_referencias_pergunta(
+
+            cursor,
+
+            pergunta,
+
+            exigir_ativos=True
+
+        )
+
+
+        cursor.execute(
+            """
             INSERT INTO perguntas (
+
                 tipo_entrevista_id,
+
                 competencia_id,
+
                 texto,
+
                 exemplo_esperado,
+
                 ordem,
+
                 ativa,
+
                 peso,
-                usa_star
+
+                usa_star,
+
+                area_tecnica_id,
+
+                subarea_tecnica_id
+
             )
 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?
+            )
             """,
             (
+
                 pergunta.tipo_entrevista_id,
 
                 pergunta.competencia_id,
@@ -301,40 +705,55 @@ def cadastrar_pergunta(
 
                 (
                     pergunta.exemplo_esperado.strip()
+
                     if (
                         pergunta.exemplo_esperado
+                        is not None
                         and pergunta.exemplo_esperado.strip()
                     )
+
                     else None
                 ),
 
                 pergunta.ordem,
 
-                1
-                if pergunta.ativa
-                else 0,
+                (
+                    1
+                    if pergunta.ativa
+                    else 0
+                ),
 
                 pergunta.peso,
 
-                1
-                if pergunta.usa_star
-                else 0
+                (
+                    1
+                    if pergunta.usa_star
+                    else 0
+                ),
+
+                pergunta.area_tecnica_id,
+
+                pergunta.subarea_tecnica_id
+
             )
         )
 
 
-        pergunta_id = (
-            cursor.lastrowid
-        )
+        pergunta_id = cursor.lastrowid
 
 
         conexao.commit()
 
 
-        return pergunta_id
+        return int(
+            pergunta_id
+        )
 
 
-    except sqlite3.Error:
+    except (
+        sqlite3.Error,
+        ValueError
+    ):
 
         conexao.rollback()
 
@@ -347,21 +766,33 @@ def cadastrar_pergunta(
 
 
 # ============================================================
-# LISTAR TODAS AS PERGUNTAS
+# LISTAR PERGUNTAS
 # ============================================================
 
 def listar_perguntas(
-    somente_ativas: bool = False
+    somente_ativas: bool = False,
+    tipo_entrevista_id: int | None = None,
+    competencia_id: int | None = None,
+    area_tecnica_id: int | None = None,
+    subarea_tecnica_id: int | None = None
 ) -> list[Pergunta]:
     """
-    Retorna as perguntas cadastradas.
+    Lista as perguntas cadastradas.
 
-    Quando somente_ativas=True, uma pergunta
-    somente será considerada disponível quando:
+    Permite filtros por:
 
-    - a própria pergunta estiver ativa;
-    - o tipo de entrevista estiver ativo;
-    - a competência estiver ativa.
+    - status;
+    - tipo de entrevista;
+    - competência;
+    - área técnica;
+    - subárea técnica.
+
+    Quando somente_ativas=True, também são
+    considerados os status dos registros pais.
+
+    Assim, uma pergunta ativa vinculada a tipo,
+    competência, área ou subárea inativos não
+    será disponibilizada para uso.
     """
 
     conexao = conectar_banco()
@@ -371,58 +802,204 @@ def listar_perguntas(
 
     try:
 
+        condicoes = []
+
+        parametros = []
+
+
+        # ----------------------------------------------------
+        # SOMENTE ATIVAS
+        # ----------------------------------------------------
+
         if somente_ativas:
 
-            cursor.execute(
+            condicoes.append(
+                "p.ativa = 1"
+            )
+
+            condicoes.append(
+                "te.ativo = 1"
+            )
+
+            condicoes.append(
+                "c.ativa = 1"
+            )
+
+
+            # Para tipos que utilizam área técnica,
+            # área e subárea precisam existir,
+            # estar ativas e possuir vínculo correto.
+
+            condicoes.append(
                 """
-                SELECT
-                    p.*
+                (
+                    te.usa_area_tecnica = 0
 
-                FROM perguntas p
+                    OR
 
-                INNER JOIN tipos_entrevista t
-                    ON t.id = p.tipo_entrevista_id
+                    (
+                        p.area_tecnica_id IS NOT NULL
 
-                INNER JOIN competencias c
-                    ON c.id = p.competencia_id
+                        AND
 
-                WHERE p.ativa = 1
+                        p.subarea_tecnica_id IS NOT NULL
 
-                  AND t.ativo = 1
+                        AND
 
-                  AND c.ativa = 1
+                        a.ativo = 1
 
-                ORDER BY
-                    COALESCE(
-                        p.ordem,
-                        999999
-                    ),
-                    p.id
+                        AND
+
+                        s.ativo = 1
+
+                        AND
+
+                        s.area_tecnica_id =
+                            p.area_tecnica_id
+                    )
+                )
                 """
             )
 
 
-        else:
+        # ----------------------------------------------------
+        # FILTRO POR TIPO
+        # ----------------------------------------------------
 
-            cursor.execute(
-                """
-                SELECT *
+        if tipo_entrevista_id is not None:
 
-                FROM perguntas
+            _validar_id(
+                tipo_entrevista_id,
+                "Tipo de entrevista"
+            )
 
-                ORDER BY
-                    COALESCE(
-                        ordem,
-                        999999
-                    ),
-                    id
-                """
+            condicoes.append(
+                "p.tipo_entrevista_id = ?"
+            )
+
+            parametros.append(
+                tipo_entrevista_id
             )
 
 
-        registros = (
-            cursor.fetchall()
+        # ----------------------------------------------------
+        # FILTRO POR COMPETÊNCIA
+        # ----------------------------------------------------
+
+        if competencia_id is not None:
+
+            _validar_id(
+                competencia_id,
+                "Competência"
+            )
+
+            condicoes.append(
+                "p.competencia_id = ?"
+            )
+
+            parametros.append(
+                competencia_id
+            )
+
+
+        # ----------------------------------------------------
+        # FILTRO POR ÁREA
+        # ----------------------------------------------------
+
+        if area_tecnica_id is not None:
+
+            _validar_id(
+                area_tecnica_id,
+                "Área técnica"
+            )
+
+            condicoes.append(
+                "p.area_tecnica_id = ?"
+            )
+
+            parametros.append(
+                area_tecnica_id
+            )
+
+
+        # ----------------------------------------------------
+        # FILTRO POR SUBÁREA
+        # ----------------------------------------------------
+
+        if subarea_tecnica_id is not None:
+
+            _validar_id(
+                subarea_tecnica_id,
+                "Subárea técnica"
+            )
+
+            condicoes.append(
+                "p.subarea_tecnica_id = ?"
+            )
+
+            parametros.append(
+                subarea_tecnica_id
+            )
+
+
+        where = ""
+
+
+        if condicoes:
+
+            where = (
+                "WHERE "
+                + " AND ".join(
+                    condicoes
+                )
+            )
+
+
+        cursor.execute(
+            f"""
+            SELECT
+                p.*
+
+            FROM perguntas p
+
+            INNER JOIN tipos_entrevista te
+
+                ON te.id =
+                    p.tipo_entrevista_id
+
+            INNER JOIN competencias c
+
+                ON c.id =
+                    p.competencia_id
+
+            LEFT JOIN areas_tecnicas a
+
+                ON a.id =
+                    p.area_tecnica_id
+
+            LEFT JOIN subareas_tecnicas s
+
+                ON s.id =
+                    p.subarea_tecnica_id
+
+            {where}
+
+            ORDER BY
+
+                COALESCE(
+                    p.ordem,
+                    999999
+                ),
+
+                p.id
+            """,
+            tuple(
+                parametros
+            )
         )
+
+
+        registros = cursor.fetchall()
 
 
         return [
@@ -431,7 +1008,9 @@ def listar_perguntas(
                 registro
             )
 
-            for registro in registros
+            for registro
+            in registros
+
         ]
 
 
@@ -441,22 +1020,19 @@ def listar_perguntas(
 
 
 # ============================================================
-# BUSCAR PERGUNTA POR ID
+# BUSCAR PERGUNTA
 # ============================================================
 
 def buscar_pergunta(
     pergunta_id: int
 ) -> Pergunta | None:
     """
-    Busca uma pergunta pelo seu ID.
-
-    Retorna um objeto Pergunta caso seja encontrada.
-
-    Caso contrário, retorna None.
+    Busca uma pergunta pelo ID.
     """
 
-    _validar_pergunta_id(
-        pergunta_id
+    _validar_id(
+        pergunta_id,
+        "ID da pergunta"
     )
 
 
@@ -481,9 +1057,7 @@ def buscar_pergunta(
         )
 
 
-        registro = (
-            cursor.fetchone()
-        )
+        registro = cursor.fetchone()
 
 
         if registro is None:
@@ -502,7 +1076,43 @@ def buscar_pergunta(
 
 
 # ============================================================
-# LISTAR PERGUNTAS POR TIPO DE ENTREVISTA
+# BUSCAR PERGUNTA ATIVA
+# ============================================================
+
+def buscar_pergunta_ativa(
+    pergunta_id: int
+) -> Pergunta | None:
+    """
+    Busca uma pergunta somente quando ela
+    estiver disponível para utilização.
+
+    Além do status da própria pergunta,
+    os registros pais precisam estar ativos.
+    """
+
+    _validar_id(
+        pergunta_id,
+        "ID da pergunta"
+    )
+
+
+    perguntas = listar_perguntas(
+        somente_ativas=True
+    )
+
+
+    for pergunta in perguntas:
+
+        if pergunta.id == pergunta_id:
+
+            return pergunta
+
+
+    return None
+
+
+# ============================================================
+# LISTAR POR TIPO
 # ============================================================
 
 def listar_perguntas_por_tipo(
@@ -510,118 +1120,25 @@ def listar_perguntas_por_tipo(
     somente_ativas: bool = True
 ) -> list[Pergunta]:
     """
-    Retorna as perguntas associadas a determinado
+    Lista perguntas de determinado
     tipo de entrevista.
-
-    Quando somente_ativas=True, também verifica
-    o status do tipo e da competência.
     """
 
-    if not isinstance(
-        tipo_entrevista_id,
-        int
-    ):
+    return listar_perguntas(
 
-        raise ValueError(
-            "O tipo de entrevista informado é inválido."
+        somente_ativas=(
+            somente_ativas
+        ),
+
+        tipo_entrevista_id=(
+            tipo_entrevista_id
         )
 
-
-    if tipo_entrevista_id <= 0:
-
-        raise ValueError(
-            "O tipo de entrevista informado é inválido."
-        )
-
-
-    conexao = conectar_banco()
-
-    cursor = conexao.cursor()
-
-
-    try:
-
-        if somente_ativas:
-
-            cursor.execute(
-                """
-                SELECT
-                    p.*
-
-                FROM perguntas p
-
-                INNER JOIN tipos_entrevista t
-                    ON t.id = p.tipo_entrevista_id
-
-                INNER JOIN competencias c
-                    ON c.id = p.competencia_id
-
-                WHERE p.tipo_entrevista_id = ?
-
-                  AND p.ativa = 1
-
-                  AND t.ativo = 1
-
-                  AND c.ativa = 1
-
-                ORDER BY
-                    COALESCE(
-                        p.ordem,
-                        999999
-                    ),
-                    p.id
-                """,
-                (
-                    tipo_entrevista_id,
-                )
-            )
-
-
-        else:
-
-            cursor.execute(
-                """
-                SELECT *
-
-                FROM perguntas
-
-                WHERE tipo_entrevista_id = ?
-
-                ORDER BY
-                    COALESCE(
-                        ordem,
-                        999999
-                    ),
-                    id
-                """,
-                (
-                    tipo_entrevista_id,
-                )
-            )
-
-
-        registros = (
-            cursor.fetchall()
-        )
-
-
-        return [
-
-            _registro_para_pergunta(
-                registro
-            )
-
-            for registro in registros
-        ]
-
-
-    finally:
-
-        conexao.close()
+    )
 
 
 # ============================================================
-# LISTAR PERGUNTAS POR COMPETÊNCIA
+# LISTAR POR COMPETÊNCIA
 # ============================================================
 
 def listar_perguntas_por_competencia(
@@ -629,27 +1146,113 @@ def listar_perguntas_por_competencia(
     somente_ativas: bool = True
 ) -> list[Pergunta]:
     """
-    Retorna perguntas associadas a determinada competência.
-
-    Quando somente_ativas=True, também verifica
-    o status da competência e do tipo de entrevista.
+    Lista perguntas de determinada competência.
     """
 
-    if not isinstance(
-        competencia_id,
-        int
-    ):
+    return listar_perguntas(
 
-        raise ValueError(
-            "A competência informada é inválida."
+        somente_ativas=(
+            somente_ativas
+        ),
+
+        competencia_id=(
+            competencia_id
         )
 
+    )
 
-    if competencia_id <= 0:
 
-        raise ValueError(
-            "A competência informada é inválida."
+# ============================================================
+# LISTAR POR ÁREA
+# ============================================================
+
+def listar_perguntas_por_area(
+    area_tecnica_id: int,
+    somente_ativas: bool = True
+) -> list[Pergunta]:
+    """
+    Lista perguntas de determinada área técnica.
+    """
+
+    return listar_perguntas(
+
+        somente_ativas=(
+            somente_ativas
+        ),
+
+        area_tecnica_id=(
+            area_tecnica_id
         )
+
+    )
+
+
+# ============================================================
+# LISTAR POR SUBÁREA
+# ============================================================
+
+def listar_perguntas_por_subarea(
+    subarea_tecnica_id: int,
+    somente_ativas: bool = True
+) -> list[Pergunta]:
+    """
+    Lista perguntas vinculadas diretamente
+    a determinada subárea.
+    """
+
+    return listar_perguntas(
+
+        somente_ativas=(
+            somente_ativas
+        ),
+
+        subarea_tecnica_id=(
+            subarea_tecnica_id
+        )
+
+    )
+
+
+# ============================================================
+# LISTAR PERGUNTAS PARA ENTREVISTA TÉCNICA
+# ============================================================
+
+def listar_perguntas_tecnicas(
+    area_tecnica_id: int,
+    subarea_tecnica_id: int,
+    incluir_geral: bool = True
+) -> list[Pergunta]:
+    """
+    Retorna as perguntas que poderão compor
+    uma entrevista técnica.
+
+    Regra aprovada:
+
+    Se a subárea escolhida for específica:
+
+        perguntas da área / Geral
+        +
+        perguntas da área / subárea escolhida
+
+    Se a subárea escolhida já for Geral:
+
+        apenas perguntas da área / Geral
+
+    A utilização definitiva desta função para
+    congelar as perguntas ocorrerá na etapa
+    de criação da entrevista.
+    """
+
+    _validar_id(
+        area_tecnica_id,
+        "Área técnica"
+    )
+
+
+    _validar_id(
+        subarea_tecnica_id,
+        "Subárea técnica"
+    )
 
 
     conexao = conectar_banco()
@@ -659,68 +1262,255 @@ def listar_perguntas_por_competencia(
 
     try:
 
-        if somente_ativas:
+        # ====================================================
+        # VALIDAR ÁREA
+        # ====================================================
 
-            cursor.execute(
-                """
-                SELECT
-                    p.*
+        area = _buscar_area_tecnica(
 
-                FROM perguntas p
+            cursor,
 
-                INNER JOIN tipos_entrevista t
-                    ON t.id = p.tipo_entrevista_id
+            area_tecnica_id
 
-                INNER JOIN competencias c
-                    ON c.id = p.competencia_id
-
-                WHERE p.competencia_id = ?
-
-                  AND p.ativa = 1
-
-                  AND t.ativo = 1
-
-                  AND c.ativa = 1
-
-                ORDER BY
-                    COALESCE(
-                        p.ordem,
-                        999999
-                    ),
-                    p.id
-                """,
-                (
-                    competencia_id,
-                )
-            )
-
-
-        else:
-
-            cursor.execute(
-                """
-                SELECT *
-
-                FROM perguntas
-
-                WHERE competencia_id = ?
-
-                ORDER BY
-                    COALESCE(
-                        ordem,
-                        999999
-                    ),
-                    id
-                """,
-                (
-                    competencia_id,
-                )
-            )
-
-
-        registros = (
-            cursor.fetchall()
         )
+
+
+        if area is None:
+
+            raise ValueError(
+                "Área técnica não encontrada."
+            )
+
+
+        if not bool(
+            area[
+                "ativo"
+            ]
+        ):
+
+            raise ValueError(
+                "A área técnica selecionada "
+                "está inativa."
+            )
+
+
+        # ====================================================
+        # VALIDAR SUBÁREA
+        # ====================================================
+
+        subarea = _buscar_subarea_tecnica(
+
+            cursor,
+
+            subarea_tecnica_id
+
+        )
+
+
+        if subarea is None:
+
+            raise ValueError(
+                "Subárea técnica não encontrada."
+            )
+
+
+        if (
+            subarea[
+                "area_tecnica_id"
+            ]
+            != area_tecnica_id
+        ):
+
+            raise ValueError(
+                "A subárea informada não pertence "
+                "à área técnica selecionada."
+            )
+
+
+        if not bool(
+            subarea[
+                "ativo"
+            ]
+        ):
+
+            raise ValueError(
+                "A subárea técnica selecionada "
+                "está inativa."
+            )
+
+
+        # ====================================================
+        # LOCALIZAR GERAL
+        # ====================================================
+
+        cursor.execute(
+            """
+            SELECT id
+
+            FROM subareas_tecnicas
+
+            WHERE
+                area_tecnica_id = ?
+
+              AND
+                eh_geral = 1
+
+              AND
+                ativo = 1
+
+            LIMIT 1
+            """,
+            (
+                area_tecnica_id,
+            )
+        )
+
+
+        geral = cursor.fetchone()
+
+
+        if geral is None:
+
+            raise ValueError(
+                "A área técnica não possui uma "
+                "subárea Geral ativa."
+            )
+
+
+        geral_id = int(
+            geral[
+                "id"
+            ]
+        )
+
+
+        # ====================================================
+        # DEFINIR SUBÁREAS UTILIZADAS
+        # ====================================================
+
+        subareas_ids = [
+            subarea_tecnica_id
+        ]
+
+
+        if (
+            incluir_geral
+
+            and
+
+            subarea_tecnica_id
+            != geral_id
+        ):
+
+            subareas_ids.insert(
+                0,
+                geral_id
+            )
+
+
+        placeholders = ",".join(
+            "?"
+            for _ in subareas_ids
+        )
+
+
+        parametros = [
+
+            area_tecnica_id,
+
+            *subareas_ids
+
+        ]
+
+
+        # ====================================================
+        # BUSCAR PERGUNTAS
+        # ====================================================
+
+        cursor.execute(
+            f"""
+            SELECT
+                p.*
+
+            FROM perguntas p
+
+            INNER JOIN tipos_entrevista te
+
+                ON te.id =
+                    p.tipo_entrevista_id
+
+            INNER JOIN competencias c
+
+                ON c.id =
+                    p.competencia_id
+
+            INNER JOIN areas_tecnicas a
+
+                ON a.id =
+                    p.area_tecnica_id
+
+            INNER JOIN subareas_tecnicas s
+
+                ON s.id =
+                    p.subarea_tecnica_id
+
+            WHERE
+                p.ativa = 1
+
+              AND
+                te.ativo = 1
+
+              AND
+                te.usa_area_tecnica = 1
+
+              AND
+                c.ativa = 1
+
+              AND
+                a.ativo = 1
+
+              AND
+                s.ativo = 1
+
+              AND
+                p.area_tecnica_id = ?
+
+              AND
+                p.subarea_tecnica_id IN (
+                    {placeholders}
+                )
+
+              AND
+                s.area_tecnica_id =
+                    p.area_tecnica_id
+
+            ORDER BY
+
+                CASE
+
+                    WHEN
+                        p.subarea_tecnica_id = {geral_id}
+
+                    THEN 0
+
+                    ELSE 1
+
+                END,
+
+                COALESCE(
+                    p.ordem,
+                    999999
+                ),
+
+                p.id
+            """,
+            tuple(
+                parametros
+            )
+        )
+
+
+        registros = cursor.fetchall()
 
 
         return [
@@ -729,7 +1519,9 @@ def listar_perguntas_por_competencia(
                 registro
             )
 
-            for registro in registros
+            for registro
+            in registros
+
         ]
 
 
@@ -749,30 +1541,17 @@ def editar_pergunta(
     """
     Atualiza uma pergunta existente.
 
-    O tipo de entrevista e a competência escolhidos
-    precisam existir e estar ativos.
-
-    Retorna True quando a pergunta for atualizada.
-
-    Retorna False caso o ID não exista.
+    As mesmas regras utilizadas no cadastro
+    são aplicadas na edição.
     """
 
-    _validar_pergunta_id(
-        pergunta_id
+    _validar_id(
+        pergunta_id,
+        "ID da pergunta"
     )
 
 
-    pergunta_existente = buscar_pergunta(
-        pergunta_id
-    )
-
-
-    if pergunta_existente is None:
-
-        return False
-
-
-    validar_pergunta(
+    _validar_campos_pergunta(
         pergunta
     )
 
@@ -786,21 +1565,73 @@ def editar_pergunta(
 
         cursor.execute(
             """
-            UPDATE perguntas
+            BEGIN IMMEDIATE
+            """
+        )
 
-            SET
-                tipo_entrevista_id = ?,
-                competencia_id = ?,
-                texto = ?,
-                exemplo_esperado = ?,
-                ordem = ?,
-                ativa = ?,
-                peso = ?,
-                usa_star = ?
+
+        cursor.execute(
+            """
+            SELECT id
+
+            FROM perguntas
 
             WHERE id = ?
             """,
             (
+                pergunta_id,
+            )
+        )
+
+
+        if cursor.fetchone() is None:
+
+            conexao.rollback()
+
+            return False
+
+
+        _validar_referencias_pergunta(
+
+            cursor,
+
+            pergunta,
+
+            exigir_ativos=True
+
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE perguntas
+
+            SET
+
+                tipo_entrevista_id = ?,
+
+                competencia_id = ?,
+
+                texto = ?,
+
+                exemplo_esperado = ?,
+
+                ordem = ?,
+
+                ativa = ?,
+
+                peso = ?,
+
+                usa_star = ?,
+
+                area_tecnica_id = ?,
+
+                subarea_tecnica_id = ?
+
+            WHERE id = ?
+            """,
+            (
+
                 pergunta.tipo_entrevista_id,
 
                 pergunta.competencia_id,
@@ -809,26 +1640,38 @@ def editar_pergunta(
 
                 (
                     pergunta.exemplo_esperado.strip()
+
                     if (
                         pergunta.exemplo_esperado
+                        is not None
                         and pergunta.exemplo_esperado.strip()
                     )
+
                     else None
                 ),
 
                 pergunta.ordem,
 
-                1
-                if pergunta.ativa
-                else 0,
+                (
+                    1
+                    if pergunta.ativa
+                    else 0
+                ),
 
                 pergunta.peso,
 
-                1
-                if pergunta.usa_star
-                else 0,
+                (
+                    1
+                    if pergunta.usa_star
+                    else 0
+                ),
+
+                pergunta.area_tecnica_id,
+
+                pergunta.subarea_tecnica_id,
 
                 pergunta_id
+
             )
         )
 
@@ -836,12 +1679,13 @@ def editar_pergunta(
         conexao.commit()
 
 
-        return (
-            cursor.rowcount > 0
-        )
+        return True
 
 
-    except sqlite3.Error:
+    except (
+        sqlite3.Error,
+        ValueError
+    ):
 
         conexao.rollback()
 
@@ -863,78 +1707,13 @@ def desativar_pergunta(
     """
     Desativa uma pergunta.
 
-    A pergunta permanece no banco para preservar
-    o histórico das entrevistas anteriores.
+    O registro permanece no banco para
+    preservação histórica.
     """
 
-    return _alterar_status_pergunta(
+    _validar_id(
         pergunta_id,
-        False
-    )
-
-
-# ============================================================
-# REATIVAR PERGUNTA
-# ============================================================
-
-def reativar_pergunta(
-    pergunta_id: int
-) -> bool:
-    """
-    Reativa uma pergunta anteriormente desativada.
-
-    Para ser reativada:
-
-    - o tipo de entrevista deve estar ativo;
-    - a competência deve estar ativa.
-    """
-
-    _validar_pergunta_id(
-        pergunta_id
-    )
-
-
-    pergunta = buscar_pergunta(
-        pergunta_id
-    )
-
-
-    if pergunta is None:
-
-        return False
-
-
-    _validar_tipo_entrevista_ativo(
-        pergunta.tipo_entrevista_id
-    )
-
-
-    _validar_competencia_ativa(
-        pergunta.competencia_id
-    )
-
-
-    return _alterar_status_pergunta(
-        pergunta_id,
-        True
-    )
-
-
-# ============================================================
-# ALTERAR STATUS DA PERGUNTA
-# ============================================================
-
-def _alterar_status_pergunta(
-    pergunta_id: int,
-    ativa: bool
-) -> bool:
-    """
-    Função interna utilizada para ativar ou
-    desativar perguntas.
-    """
-
-    _validar_pergunta_id(
-        pergunta_id
+        "ID da pergunta"
     )
 
 
@@ -947,7 +1726,83 @@ def _alterar_status_pergunta(
 
         cursor.execute(
             """
-            SELECT id
+            UPDATE perguntas
+
+            SET ativa = 0
+
+            WHERE id = ?
+            """,
+            (
+                pergunta_id,
+            )
+        )
+
+
+        alterada = (
+            cursor.rowcount > 0
+        )
+
+
+        conexao.commit()
+
+
+        return alterada
+
+
+    except sqlite3.Error:
+
+        conexao.rollback()
+
+        raise
+
+
+    finally:
+
+        conexao.close()
+
+
+# ============================================================
+# REATIVAR PERGUNTA
+# ============================================================
+
+def reativar_pergunta(
+    pergunta_id: int
+) -> bool:
+    """
+    Reativa uma pergunta.
+
+    Antes da reativação são validados:
+
+    - tipo de entrevista;
+    - competência;
+    - área;
+    - subárea;
+    - status de todos os registros relacionados.
+    """
+
+    _validar_id(
+        pergunta_id,
+        "ID da pergunta"
+    )
+
+
+    conexao = conectar_banco()
+
+    cursor = conexao.cursor()
+
+
+    try:
+
+        cursor.execute(
+            """
+            BEGIN IMMEDIATE
+            """
+        )
+
+
+        cursor.execute(
+            """
+            SELECT *
 
             FROM perguntas
 
@@ -959,25 +1814,47 @@ def _alterar_status_pergunta(
         )
 
 
-        if cursor.fetchone() is None:
+        registro = cursor.fetchone()
+
+
+        if registro is None:
+
+            conexao.rollback()
 
             return False
+
+
+        pergunta = _registro_para_pergunta(
+            registro
+        )
+
+
+        _validar_campos_pergunta(
+            pergunta
+        )
+
+
+        _validar_referencias_pergunta(
+
+            cursor,
+
+            pergunta,
+
+            exigir_ativos=True
+
+        )
 
 
         cursor.execute(
             """
             UPDATE perguntas
 
-            SET ativa = ?
+            SET ativa = 1
 
             WHERE id = ?
             """,
             (
-                1
-                if ativa
-                else 0,
-
-                pergunta_id
+                pergunta_id,
             )
         )
 
@@ -988,7 +1865,10 @@ def _alterar_status_pergunta(
         return True
 
 
-    except sqlite3.Error:
+    except (
+        sqlite3.Error,
+        ValueError
+    ):
 
         conexao.rollback()
 
@@ -1008,19 +1888,23 @@ def excluir_pergunta(
     pergunta_id: int
 ) -> bool:
     """
-    Exclui fisicamente uma pergunta.
+    Exclui fisicamente uma pergunta apenas quando
+    ela nunca tiver sido utilizada.
 
-    IMPORTANTE:
+    Caso tenha sido utilizada em:
 
-    Perguntas utilizadas em entrevistas anteriores
-    não podem ser excluídas.
+    - respostas;
+    - conjunto congelado de uma entrevista;
 
-    Nesses casos, deve-se utilizar
-    desativar_pergunta().
+    a exclusão é bloqueada.
+
+    Para preservação histórica, o comportamento
+    normal da administração deve ser inativar.
     """
 
-    _validar_pergunta_id(
-        pergunta_id
+    _validar_id(
+        pergunta_id,
+        "ID da pergunta"
     )
 
 
@@ -1031,9 +1915,16 @@ def excluir_pergunta(
 
     try:
 
-        # ----------------------------------------------------
+        cursor.execute(
+            """
+            BEGIN IMMEDIATE
+            """
+        )
+
+
+        # ====================================================
         # VERIFICAR EXISTÊNCIA
-        # ----------------------------------------------------
+        # ====================================================
 
         cursor.execute(
             """
@@ -1051,17 +1942,18 @@ def excluir_pergunta(
 
         if cursor.fetchone() is None:
 
+            conexao.rollback()
+
             return False
 
 
-        # ----------------------------------------------------
-        # VERIFICAR USO
-        # ----------------------------------------------------
+        # ====================================================
+        # VERIFICAR RESPOSTAS
+        # ====================================================
 
         cursor.execute(
             """
-            SELECT
-                COUNT(*) AS quantidade
+            SELECT COUNT(*) AS quantidade
 
             FROM respostas
 
@@ -1073,28 +1965,61 @@ def excluir_pergunta(
         )
 
 
-        registro = (
-            cursor.fetchone()
-        )
-
-
         quantidade_respostas = int(
-            registro["quantidade"]
+            cursor.fetchone()[
+                "quantidade"
+            ]
         )
 
 
         if quantidade_respostas > 0:
 
             raise ValueError(
-                "A pergunta não pode ser excluída porque "
-                "já foi utilizada em uma entrevista. "
-                "Utilize a opção de desativação."
+                "A pergunta não pode ser excluída "
+                "porque já foi utilizada em uma "
+                "entrevista. Utilize a opção de "
+                "inativação."
             )
 
 
-        # ----------------------------------------------------
+        # ====================================================
+        # VERIFICAR SNAPSHOT DE ENTREVISTA
+        # ====================================================
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS quantidade
+
+            FROM entrevista_perguntas
+
+            WHERE pergunta_id = ?
+            """,
+            (
+                pergunta_id,
+            )
+        )
+
+
+        quantidade_snapshots = int(
+            cursor.fetchone()[
+                "quantidade"
+            ]
+        )
+
+
+        if quantidade_snapshots > 0:
+
+            raise ValueError(
+                "A pergunta não pode ser excluída "
+                "porque faz parte do conjunto histórico "
+                "de uma entrevista. Utilize a opção de "
+                "inativação."
+            )
+
+
+        # ====================================================
         # EXCLUIR
-        # ----------------------------------------------------
+        # ====================================================
 
         cursor.execute(
             """
@@ -1111,9 +2036,7 @@ def excluir_pergunta(
         conexao.commit()
 
 
-        return (
-            cursor.rowcount > 0
-        )
+        return True
 
 
     except (
@@ -1132,175 +2055,20 @@ def excluir_pergunta(
 
 
 # ============================================================
-# VALIDAR PERGUNTA
-# ============================================================
-
-def validar_pergunta(
-    pergunta: Pergunta
-) -> None:
-    """
-    Valida os dados de uma pergunta.
-
-    Caso alguma regra não seja atendida,
-    gera ValueError.
-
-    Além da validação dos campos, esta função
-    também verifica a integridade das referências.
-    """
-
-    if pergunta is None:
-
-        raise ValueError(
-            "A pergunta é obrigatória."
-        )
-
-
-    # --------------------------------------------------------
-    # TEXTO
-    # --------------------------------------------------------
-
-    if not pergunta.texto:
-
-        raise ValueError(
-            "O texto da pergunta é obrigatório."
-        )
-
-
-    if not isinstance(
-        pergunta.texto,
-        str
-    ):
-
-        raise ValueError(
-            "O texto da pergunta deve ser um texto."
-        )
-
-
-    if not pergunta.texto.strip():
-
-        raise ValueError(
-            "O texto da pergunta não pode estar vazio."
-        )
-
-
-    # --------------------------------------------------------
-    # TIPO DE ENTREVISTA
-    # --------------------------------------------------------
-
-    if pergunta.tipo_entrevista_id is None:
-
-        raise ValueError(
-            "O tipo de entrevista é obrigatório."
-        )
-
-
-    _validar_tipo_entrevista_ativo(
-        pergunta.tipo_entrevista_id
-    )
-
-
-    # --------------------------------------------------------
-    # COMPETÊNCIA
-    # --------------------------------------------------------
-
-    if pergunta.competencia_id is None:
-
-        raise ValueError(
-            "A competência é obrigatória."
-        )
-
-
-    _validar_competencia_ativa(
-        pergunta.competencia_id
-    )
-
-
-    # --------------------------------------------------------
-    # PESO
-    # --------------------------------------------------------
-
-    if pergunta.peso is None:
-
-        raise ValueError(
-            "O peso da pergunta é obrigatório."
-        )
-
-
-    try:
-
-        peso = float(
-            pergunta.peso
-        )
-
-    except (
-        TypeError,
-        ValueError
-    ):
-
-        raise ValueError(
-            "O peso da pergunta deve ser numérico."
-        )
-
-
-    if peso <= 0:
-
-        raise ValueError(
-            "O peso da pergunta deve ser maior que zero."
-        )
-
-
-    # --------------------------------------------------------
-    # ORDEM
-    # --------------------------------------------------------
-
-    if pergunta.ordem is not None:
-
-        if not isinstance(
-            pergunta.ordem,
-            int
-        ):
-
-            raise ValueError(
-                "A ordem da pergunta deve ser "
-                "um número inteiro."
-            )
-
-
-        if pergunta.ordem <= 0:
-
-            raise ValueError(
-                "A ordem da pergunta deve ser maior que zero."
-            )
-
-
-    # --------------------------------------------------------
-    # EXEMPLO ESPERADO
-    # --------------------------------------------------------
-
-    if (
-        pergunta.exemplo_esperado is not None
-        and not isinstance(
-            pergunta.exemplo_esperado,
-            str
-        )
-    ):
-
-        raise ValueError(
-            "O exemplo esperado deve ser um texto."
-        )
-
-
-# ============================================================
-# CONVERTER REGISTRO SQLITE PARA PERGUNTA
+# CONVERTER REGISTRO SQLITE
 # ============================================================
 
 def _registro_para_pergunta(
     registro: sqlite3.Row
 ) -> Pergunta:
     """
-    Converte um registro retornado pelo SQLite
-    em um objeto da classe Pergunta.
+    Converte um registro SQLite em Pergunta.
     """
+
+    colunas = (
+        registro.keys()
+    )
+
 
     return Pergunta(
 
@@ -1346,6 +2114,30 @@ def _registro_para_pergunta(
 
         data_criacao=registro[
             "data_criacao"
-        ]
+        ],
+
+        area_tecnica_id=(
+
+            registro[
+                "area_tecnica_id"
+            ]
+
+            if "area_tecnica_id"
+            in colunas
+
+            else None
+        ),
+
+        subarea_tecnica_id=(
+
+            registro[
+                "subarea_tecnica_id"
+            ]
+
+            if "subarea_tecnica_id"
+            in colunas
+
+            else None
+        )
 
     )

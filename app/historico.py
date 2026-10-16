@@ -1,26 +1,47 @@
 """
 historico.py
 
-Serviço responsável pelo histórico de desempenho
+Serviço responsável pelo histórico de entrevistas
 do Simulador de Entrevistas.
 
-Versão: 0.3
+Versão: 0.7
 
 Responsabilidades:
 
-- listar o histórico de entrevistas do usuário;
-- gerar resumo do desempenho;
+- listar entrevistas anteriores do estudante;
+- apresentar tipo de entrevista histórico;
+- apresentar área e subárea histórica;
+- gerar resumo de desempenho;
 - apresentar evolução das pontuações;
-- apresentar evolução por critério.
+- apresentar evolução por critérios;
+- preservar os dados históricos das entrevistas.
 
-Este arquivo contém somente regras de negócio.
+IMPORTANTE:
 
-Os endpoints HTTP ficam em:
+O histórico não consulta os nomes atuais dos
+tipos, áreas ou subáreas para reconstruir
+entrevistas antigas.
 
-app/routers/historico.py
+São utilizados os snapshots armazenados
+na própria entrevista.
+
+Assim:
+
+- renomear uma área não modifica o passado;
+- renomear uma subárea não modifica o passado;
+- editar o tipo de entrevista não modifica o passado.
+
+Também não são escondidos erros de integridade.
+
+Caso o Motor de Pontuação identifique dados históricos
+inconsistentes, o erro será propagado para que o problema
+possa ser diagnosticado corretamente.
 """
 
-from .entrevistas import listar_entrevistas_usuario
+from .database import (
+    conectar_banco
+)
+
 
 from .avaliacao import (
     calcular_desempenho_criterios
@@ -28,34 +49,32 @@ from .avaliacao import (
 
 
 # ============================================================
-# FUNÇÃO AUXILIAR
+# VALIDAR ID
 # ============================================================
 
-def _valor(
-    objeto,
-    atributo,
-    padrao=None
-):
+def _validar_id(
+    valor: int,
+    campo: str
+) -> None:
     """
-    Obtém um atributo tanto de objetos
-    quanto de dicionários.
+    Valida identificadores numéricos.
     """
 
-    if objeto is None:
-        return padrao
+    if not isinstance(
+        valor,
+        int
+    ):
 
-    if isinstance(objeto, dict):
-
-        return objeto.get(
-            atributo,
-            padrao
+        raise ValueError(
+            f"{campo} inválido."
         )
 
-    return getattr(
-        objeto,
-        atributo,
-        padrao
-    )
+
+    if valor <= 0:
+
+        raise ValueError(
+            f"{campo} inválido."
+        )
 
 
 # ============================================================
@@ -66,169 +85,277 @@ def listar_historico(
     usuario_id: int
 ) -> list[dict]:
     """
-    Retorna o histórico de entrevistas
-    pertencentes ao usuário.
+    Retorna todas as entrevistas pertencentes
+    ao usuário.
 
-    As entrevistas são apresentadas
-    da mais recente para a mais antiga.
+    As mais recentes aparecem primeiro.
+
+    Também retorna o contexto histórico
+    da entrevista técnica quando aplicável.
     """
 
-    if usuario_id <= 0:
-
-        raise ValueError(
-            "ID do usuário inválido."
-        )
-
-
-    entrevistas = listar_entrevistas_usuario(
-        usuario_id
+    _validar_id(
+        usuario_id,
+        "ID do usuário"
     )
 
 
-    historico = []
+    conexao = conectar_banco()
+
+    cursor = conexao.cursor()
 
 
-    for entrevista in entrevistas:
+    try:
 
-        historico.append(
+        cursor.execute(
+            """
+            SELECT
+
+                id,
+
+                tipo_entrevista_id,
+
+                tipo_entrevista_nome_aplicado,
+
+                area_tecnica_id,
+
+                area_tecnica_nome_aplicado,
+
+                subarea_tecnica_id,
+
+                subarea_tecnica_nome_aplicado,
+
+                data_inicio,
+
+                data_fim,
+
+                status,
+
+                pontuacao_final
+
+            FROM entrevistas
+
+            WHERE usuario_id = ?
+
+            ORDER BY
+
+                data_inicio DESC,
+
+                id DESC
+            """,
+            (
+                usuario_id,
+            )
+        )
+
+
+        registros = cursor.fetchall()
+
+
+        return [
+
             {
+
                 "id":
-                    _valor(
-                        entrevista,
+                    registro[
                         "id"
-                    ),
+                    ],
 
                 "tipo_entrevista_id":
-                    _valor(
-                        entrevista,
+                    registro[
                         "tipo_entrevista_id"
-                    ),
+                    ],
+
+                "tipo_entrevista":
+                    registro[
+                        "tipo_entrevista_nome_aplicado"
+                    ],
+
+                "area_tecnica_id":
+                    registro[
+                        "area_tecnica_id"
+                    ],
+
+                "area_tecnica":
+                    registro[
+                        "area_tecnica_nome_aplicado"
+                    ],
+
+                "subarea_tecnica_id":
+                    registro[
+                        "subarea_tecnica_id"
+                    ],
+
+                "subarea_tecnica":
+                    registro[
+                        "subarea_tecnica_nome_aplicado"
+                    ],
 
                 "data_inicio":
-                    _valor(
-                        entrevista,
+                    registro[
                         "data_inicio"
-                    ),
+                    ],
 
                 "data_fim":
-                    _valor(
-                        entrevista,
+                    registro[
                         "data_fim"
-                    ),
+                    ],
 
                 "status":
-                    _valor(
-                        entrevista,
+                    registro[
                         "status"
-                    ),
+                    ],
 
                 "pontuacao_final":
-                    _valor(
-                        entrevista,
+                    registro[
                         "pontuacao_final"
-                    )
+                    ]
+
             }
-        )
+
+            for registro
+            in registros
+
+        ]
 
 
-    historico.sort(
-        key=lambda item:
-            item["data_inicio"] or "",
-        reverse=True
-    )
+    finally:
 
-
-    return historico
+        conexao.close()
 
 
 # ============================================================
-# GERAR RESUMO DO HISTÓRICO
+# GERAR RESUMO
 # ============================================================
 
 def gerar_resumo_historico(
     usuario_id: int
 ) -> dict:
     """
-    Gera indicadores resumidos do histórico
-    de entrevistas do usuário.
+    Gera um resumo das entrevistas realizadas
+    pelo usuário.
 
-    Retorna:
+    Mantém o contrato utilizado pelo frontend:
 
-    - quantidade total;
-    - quantidade avaliada;
-    - média das pontuações;
-    - melhor pontuação;
-    - última pontuação.
+    - quantidade_total;
+    - quantidade_avaliada;
+    - media_pontuacoes;
+    - melhor_pontuacao;
+    - ultima_pontuacao.
     """
+
+    _validar_id(
+        usuario_id,
+        "ID do usuário"
+    )
+
 
     historico = listar_historico(
         usuario_id
     )
 
 
-    pontuacoes = []
-
-
-    for entrevista in historico:
-
-        pontuacao = entrevista.get(
-            "pontuacao_final"
-        )
-
-        if pontuacao is not None:
-
-            pontuacoes.append(
-                float(pontuacao)
-            )
-
-
     quantidade_total = len(
         historico
     )
 
-    quantidade_avaliada = len(
-        pontuacoes
-    )
 
+    entrevistas_avaliadas = [
 
-    if pontuacoes:
+        entrevista
 
-        media = sum(
-            pontuacoes
-        ) / len(
-            pontuacoes
-        )
-
-        melhor = max(
-            pontuacoes
-        )
-
-    else:
-
-        media = None
-
-        melhor = None
-
-
-    ultima_pontuacao = None
-
-
-    for entrevista in historico:
+        for entrevista
+        in historico
 
         if (
+
+            entrevista[
+                "status"
+            ]
+            == "avaliada"
+
+            and
+
             entrevista[
                 "pontuacao_final"
             ]
             is not None
-        ):
 
-            ultima_pontuacao = float(
-                entrevista[
-                    "pontuacao_final"
-                ]
+        )
+
+    ]
+
+
+    quantidade_avaliada = len(
+        entrevistas_avaliadas
+    )
+
+
+    pontuacoes = [
+
+        float(
+            entrevista[
+                "pontuacao_final"
+            ]
+        )
+
+        for entrevista
+        in entrevistas_avaliadas
+
+    ]
+
+
+    if pontuacoes:
+
+        media_pontuacoes = round(
+
+            sum(
+                pontuacoes
             )
+            /
+            len(
+                pontuacoes
+            ),
 
-            break
+            2
+
+        )
+
+
+        melhor_pontuacao = round(
+
+            max(
+                pontuacoes
+            ),
+
+            2
+
+        )
+
+
+        # ----------------------------------------------------
+        # O histórico está ordenado do mais recente
+        # para o mais antigo.
+        # ----------------------------------------------------
+
+        ultima_pontuacao = round(
+
+            pontuacoes[
+                0
+            ],
+
+            2
+
+        )
+
+
+    else:
+
+        media_pontuacoes = None
+
+        melhor_pontuacao = None
+
+        ultima_pontuacao = None
 
 
     return {
@@ -239,20 +366,15 @@ def gerar_resumo_historico(
         "quantidade_avaliada":
             quantidade_avaliada,
 
-        "media_pontuacoes": (
-            round(
-                media,
-                2
-            )
-            if media is not None
-            else None
-        ),
+        "media_pontuacoes":
+            media_pontuacoes,
 
         "melhor_pontuacao":
-            melhor,
+            melhor_pontuacao,
 
         "ultima_pontuacao":
             ultima_pontuacao
+
     }
 
 
@@ -267,151 +389,401 @@ def obter_evolucao_pontuacoes(
     Retorna a evolução cronológica das
     pontuações do estudante.
 
-    Somente entrevistas que possuem
+    Somente entrevistas avaliadas e com
     pontuação final são consideradas.
     """
 
-    historico = listar_historico(
-        usuario_id
+    _validar_id(
+        usuario_id,
+        "ID do usuário"
     )
 
 
-    evolucao = []
+    conexao = conectar_banco()
+
+    cursor = conexao.cursor()
 
 
-    for entrevista in historico:
+    try:
 
-        pontuacao = entrevista.get(
-            "pontuacao_final"
+        cursor.execute(
+            """
+            SELECT
+
+                id,
+
+                tipo_entrevista_id,
+
+                tipo_entrevista_nome_aplicado,
+
+                area_tecnica_id,
+
+                area_tecnica_nome_aplicado,
+
+                subarea_tecnica_id,
+
+                subarea_tecnica_nome_aplicado,
+
+                data_inicio,
+
+                data_fim,
+
+                pontuacao_final
+
+            FROM entrevistas
+
+            WHERE
+                usuario_id = ?
+
+              AND
+                status = 'avaliada'
+
+              AND
+                pontuacao_final IS NOT NULL
+
+            ORDER BY
+
+                COALESCE(
+                    data_fim,
+                    data_inicio
+                ),
+
+                id
+            """,
+            (
+                usuario_id,
+            )
         )
 
 
-        if pontuacao is None:
-            continue
+        registros = cursor.fetchall()
 
 
-        evolucao.append(
+        return [
+
             {
-                "entrevista_id":
-                    entrevista["id"],
 
-                "data":
-                    entrevista[
-                        "data_fim"
-                    ]
-                    or
-                    entrevista[
-                        "data_inicio"
+                "entrevista_id":
+                    registro[
+                        "id"
                     ],
 
+                "data":
+                    (
+                        registro[
+                            "data_fim"
+                        ]
+                        or
+                        registro[
+                            "data_inicio"
+                        ]
+                    ),
+
                 "pontuacao":
-                    float(
-                        pontuacao
-                    )
+                    registro[
+                        "pontuacao_final"
+                    ],
+
+                "tipo_entrevista_id":
+                    registro[
+                        "tipo_entrevista_id"
+                    ],
+
+                "tipo_entrevista":
+                    registro[
+                        "tipo_entrevista_nome_aplicado"
+                    ],
+
+                "area_tecnica_id":
+                    registro[
+                        "area_tecnica_id"
+                    ],
+
+                "area_tecnica":
+                    registro[
+                        "area_tecnica_nome_aplicado"
+                    ],
+
+                "subarea_tecnica_id":
+                    registro[
+                        "subarea_tecnica_id"
+                    ],
+
+                "subarea_tecnica":
+                    registro[
+                        "subarea_tecnica_nome_aplicado"
+                    ]
+
             }
-        )
+
+            for registro
+            in registros
+
+        ]
 
 
-    # Para gráfico, queremos ordem cronológica:
-    # entrevista mais antiga -> mais recente.
+    finally:
 
-    evolucao.sort(
-        key=lambda item:
-            item["data"] or ""
-    )
-
-
-    return evolucao
+        conexao.close()
 
 
 # ============================================================
-# EVOLUÇÃO POR CRITÉRIO
+# ENTREVISTAS AVALIADAS
+# ============================================================
+
+def _listar_entrevistas_avaliadas(
+    usuario_id: int
+) -> list[dict]:
+    """
+    Retorna entrevistas avaliadas em ordem
+    cronológica para utilização na evolução
+    por critérios.
+    """
+
+    _validar_id(
+        usuario_id,
+        "ID do usuário"
+    )
+
+
+    conexao = conectar_banco()
+
+    cursor = conexao.cursor()
+
+
+    try:
+
+        cursor.execute(
+            """
+            SELECT
+
+                id,
+
+                tipo_entrevista_id,
+
+                tipo_entrevista_nome_aplicado,
+
+                area_tecnica_id,
+
+                area_tecnica_nome_aplicado,
+
+                subarea_tecnica_id,
+
+                subarea_tecnica_nome_aplicado,
+
+                data_inicio,
+
+                data_fim,
+
+                pontuacao_final
+
+            FROM entrevistas
+
+            WHERE
+                usuario_id = ?
+
+              AND
+                status = 'avaliada'
+
+            ORDER BY
+
+                COALESCE(
+                    data_fim,
+                    data_inicio
+                ),
+
+                id
+            """,
+            (
+                usuario_id,
+            )
+        )
+
+
+        registros = cursor.fetchall()
+
+
+        return [
+
+            {
+
+                "id":
+                    registro[
+                        "id"
+                    ],
+
+                "tipo_entrevista_id":
+                    registro[
+                        "tipo_entrevista_id"
+                    ],
+
+                "tipo_entrevista":
+                    registro[
+                        "tipo_entrevista_nome_aplicado"
+                    ],
+
+                "area_tecnica_id":
+                    registro[
+                        "area_tecnica_id"
+                    ],
+
+                "area_tecnica":
+                    registro[
+                        "area_tecnica_nome_aplicado"
+                    ],
+
+                "subarea_tecnica_id":
+                    registro[
+                        "subarea_tecnica_id"
+                    ],
+
+                "subarea_tecnica":
+                    registro[
+                        "subarea_tecnica_nome_aplicado"
+                    ],
+
+                "data_inicio":
+                    registro[
+                        "data_inicio"
+                    ],
+
+                "data_fim":
+                    registro[
+                        "data_fim"
+                    ],
+
+                "pontuacao_final":
+                    registro[
+                        "pontuacao_final"
+                    ]
+
+            }
+
+            for registro
+            in registros
+
+        ]
+
+
+    finally:
+
+        conexao.close()
+
+
+# ============================================================
+# EVOLUÇÃO DOS CRITÉRIOS
 # ============================================================
 
 def obter_evolucao_criterios(
     usuario_id: int
 ) -> list[dict]:
     """
-    Retorna o desempenho por critério
+    Retorna a evolução dos critérios
     ao longo das entrevistas avaliadas.
 
-    Exemplos futuros:
+    IMPORTANTÍSSIMO:
 
-    - Clareza;
-    - Objetividade;
-    - Coerência;
-    - Argumentação;
-    - Adequação.
+    Não existe tratamento silencioso de erro
+    nesta função.
+
+    Se calcular_desempenho_criterios identificar
+    inconsistência histórica, o erro será propagado.
+
+    Isso evita apresentar:
+
+        "criterios": []
+
+    quando, na realidade, existe problema nos dados.
     """
 
-    historico = listar_historico(
-        usuario_id
+    _validar_id(
+        usuario_id,
+        "ID do usuário"
+    )
+
+
+    entrevistas = (
+        _listar_entrevistas_avaliadas(
+            usuario_id
+        )
     )
 
 
     evolucao = []
 
 
-    for entrevista in historico:
+    for entrevista in entrevistas:
 
         entrevista_id = entrevista[
             "id"
         ]
 
 
-        # Entrevistas ainda sem pontuação
-        # não possuem avaliação consolidada.
+        # ====================================================
+        # NÃO ESCONDER ERROS DE INTEGRIDADE
+        # ====================================================
 
-        if (
-            entrevista[
-                "pontuacao_final"
-            ]
-            is None
-        ):
-
-            continue
-
-
-        try:
-
-            criterios = (
-                calcular_desempenho_criterios(
-                    entrevista_id
-                )
+        criterios = (
+            calcular_desempenho_criterios(
+                entrevista_id
             )
-
-        except (
-            ValueError,
-            TypeError
-        ):
-
-            criterios = []
+        )
 
 
         evolucao.append(
+
             {
+
                 "entrevista_id":
                     entrevista_id,
 
                 "data":
+                    (
+                        entrevista[
+                            "data_fim"
+                        ]
+                        or
+                        entrevista[
+                            "data_inicio"
+                        ]
+                    ),
+
+                "tipo_entrevista_id":
                     entrevista[
-                        "data_fim"
-                    ]
-                    or
+                        "tipo_entrevista_id"
+                    ],
+
+                "tipo_entrevista":
                     entrevista[
-                        "data_inicio"
+                        "tipo_entrevista"
+                    ],
+
+                "area_tecnica_id":
+                    entrevista[
+                        "area_tecnica_id"
+                    ],
+
+                "area_tecnica":
+                    entrevista[
+                        "area_tecnica"
+                    ],
+
+                "subarea_tecnica_id":
+                    entrevista[
+                        "subarea_tecnica_id"
+                    ],
+
+                "subarea_tecnica":
+                    entrevista[
+                        "subarea_tecnica"
                     ],
 
                 "criterios":
                     criterios
+
             }
+
         )
-
-
-    evolucao.sort(
-        key=lambda item:
-            item["data"] or ""
-    )
 
 
     return evolucao

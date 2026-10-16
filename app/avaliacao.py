@@ -3,17 +3,19 @@ avaliacao.py
 
 Motor de Pontuação do Simulador de Entrevistas.
 
-Versão: 0.5
+Versão: 0.6
 
 Responsabilidades:
 
 - recuperar avaliações;
 - recuperar notas por critério;
-- calcular pontuações;
-- calcular desempenho;
+- calcular pontuações das respostas;
+- calcular pontuação geral da entrevista;
+- calcular desempenho por critério;
 - classificar entrevistas;
 - identificar destaques;
-- atualizar pontuação final.
+- atualizar pontuação final;
+- preservar a integridade histórica dos cálculos.
 
 INTEGRIDADE HISTÓRICA:
 
@@ -28,8 +30,35 @@ Perguntas históricas utilizam:
 
     peso_pergunta_aplicado
 
-Assim, alterações administrativas futuras não
-modificam avaliações antigas.
+A identificação histórica da entrevista utiliza:
+
+    tipo_entrevista_nome_aplicado
+    tipo_entrevista_descricao_aplicada
+    area_tecnica_nome_aplicado
+    subarea_tecnica_nome_aplicado
+
+IMPORTANTE:
+
+Área e subárea técnica contextualizam a entrevista,
+mas NÃO alteram diretamente a fórmula matemática
+da pontuação.
+
+A pontuação continua sendo determinada por:
+
+- notas dos critérios;
+- pesos históricos dos critérios;
+- peso histórico de cada pergunta.
+
+Assim, alterações administrativas futuras em:
+
+- critérios;
+- pesos;
+- perguntas;
+- tipos de entrevista;
+- áreas;
+- subáreas;
+
+não modificam avaliações antigas.
 """
 
 import sqlite3
@@ -44,10 +73,18 @@ except ImportError:
     from database import conectar_banco
 
 
+# ============================================================
+# ESCALA DE PONTUAÇÃO
+# ============================================================
+
 NOTA_MINIMA = 0.0
 
 NOTA_MAXIMA = 10.0
 
+
+# ============================================================
+# CLASSIFICAÇÕES
+# ============================================================
 
 CLASSIFICACOES = (
 
@@ -86,6 +123,10 @@ def _validar_id(
     valor: int,
     nome: str
 ) -> None:
+    """
+    Valida identificadores utilizados pelo
+    Motor de Pontuação.
+    """
 
     if not isinstance(
         valor,
@@ -105,12 +146,116 @@ def _validar_id(
 
 
 # ============================================================
+# VALIDAR NOTA
+# ============================================================
+
+def _validar_nota(
+    valor,
+    nome: str = "Nota"
+) -> float:
+    """
+    Converte e valida uma nota na escala
+    de 0 até 10.
+    """
+
+    try:
+
+        nota = float(
+            valor
+        )
+
+    except (
+        TypeError,
+        ValueError
+    ) as erro:
+
+        raise ValueError(
+            f"{nome} inválida."
+        ) from erro
+
+
+    if (
+        nota < NOTA_MINIMA
+        or nota > NOTA_MAXIMA
+    ):
+
+        raise ValueError(
+            f"{nome} deve estar entre 0 e 10."
+        )
+
+
+    return nota
+
+
+# ============================================================
+# VALIDAR PESO
+# ============================================================
+
+def _validar_peso(
+    valor,
+    nome: str
+) -> float:
+    """
+    Converte e valida um peso histórico.
+
+    Um peso individual pode ser zero.
+
+    Entretanto, a soma dos pesos utilizados
+    em determinado cálculo deve ser maior
+    que zero.
+    """
+
+    if valor is None:
+
+        raise ValueError(
+            f"{nome} não informado."
+        )
+
+
+    try:
+
+        peso = float(
+            valor
+        )
+
+    except (
+        TypeError,
+        ValueError
+    ) as erro:
+
+        raise ValueError(
+            f"{nome} inválido."
+        ) from erro
+
+
+    if peso < 0:
+
+        raise ValueError(
+            f"{nome} não pode ser negativo."
+        )
+
+
+    return peso
+
+
+# ============================================================
 # BUSCAR ENTREVISTA
 # ============================================================
 
 def buscar_entrevista(
     entrevista_id: int
 ) -> dict | None:
+    """
+    Recupera os dados históricos da entrevista.
+
+    Tipo, área e subárea são retornados
+    utilizando os snapshots armazenados
+    na própria entrevista.
+
+    Isso impede que alterações administrativas
+    posteriores modifiquem a identificação
+    histórica da entrevista.
+    """
 
     _validar_id(
         entrevista_id,
@@ -128,15 +273,33 @@ def buscar_entrevista(
         cursor.execute(
             """
             SELECT
+
                 id,
+
                 usuario_id,
+
                 tipo_entrevista_id,
+
                 tipo_entrevista_nome_aplicado,
+
                 tipo_entrevista_descricao_aplicada,
+
+                area_tecnica_id,
+
+                area_tecnica_nome_aplicado,
+
+                subarea_tecnica_id,
+
+                subarea_tecnica_nome_aplicado,
+
                 data_inicio,
+
                 data_fim,
+
                 status,
+
                 pontuacao_final,
+
                 observacoes
 
             FROM entrevistas
@@ -160,10 +323,14 @@ def buscar_entrevista(
         return {
 
             "id":
-                registro["id"],
+                registro[
+                    "id"
+                ],
 
             "usuario_id":
-                registro["usuario_id"],
+                registro[
+                    "usuario_id"
+                ],
 
             "tipo_entrevista_id":
                 registro[
@@ -180,14 +347,40 @@ def buscar_entrevista(
                     "tipo_entrevista_descricao_aplicada"
                 ],
 
+            "area_tecnica_id":
+                registro[
+                    "area_tecnica_id"
+                ],
+
+            "area_tecnica":
+                registro[
+                    "area_tecnica_nome_aplicado"
+                ],
+
+            "subarea_tecnica_id":
+                registro[
+                    "subarea_tecnica_id"
+                ],
+
+            "subarea_tecnica":
+                registro[
+                    "subarea_tecnica_nome_aplicado"
+                ],
+
             "data_inicio":
-                registro["data_inicio"],
+                registro[
+                    "data_inicio"
+                ],
 
             "data_fim":
-                registro["data_fim"],
+                registro[
+                    "data_fim"
+                ],
 
             "status":
-                registro["status"],
+                registro[
+                    "status"
+                ],
 
             "pontuacao_final":
                 registro[
@@ -212,6 +405,23 @@ def buscar_entrevista(
 # ============================================================
 
 def buscar_criterios_ativos() -> list[dict]:
+    """
+    Recupera os critérios administrativos
+    atualmente ativos.
+
+    IMPORTANTE:
+
+    Esta função representa o estado ATUAL
+    do cadastro de critérios.
+
+    Ela não é utilizada para recalcular
+    avaliações históricas.
+
+    Os cálculos históricos utilizam os
+    snapshots existentes em:
+
+        avaliacao_criterios
+    """
 
     conexao = conectar_banco()
 
@@ -223,10 +433,15 @@ def buscar_criterios_ativos() -> list[dict]:
         cursor.execute(
             """
             SELECT
+
                 id,
+
                 nome,
+
                 descricao,
+
                 peso,
+
                 ordem
 
             FROM criterios_avaliacao
@@ -234,18 +449,18 @@ def buscar_criterios_ativos() -> list[dict]:
             WHERE ativo = 1
 
             ORDER BY
+
                 COALESCE(
                     ordem,
                     999999
                 ),
+
                 id
             """
         )
 
 
-        registros = (
-            cursor.fetchall()
-        )
+        registros = cursor.fetchall()
 
 
         return [
@@ -253,10 +468,14 @@ def buscar_criterios_ativos() -> list[dict]:
             {
 
                 "id":
-                    registro["id"],
+                    registro[
+                        "id"
+                    ],
 
                 "nome":
-                    registro["nome"],
+                    registro[
+                        "nome"
+                    ],
 
                 "descricao":
                     registro[
@@ -264,14 +483,19 @@ def buscar_criterios_ativos() -> list[dict]:
                     ],
 
                 "peso":
-                    registro["peso"],
+                    registro[
+                        "peso"
+                    ],
 
                 "ordem":
-                    registro["ordem"]
+                    registro[
+                        "ordem"
+                    ]
 
             }
 
-            for registro in registros
+            for registro
+            in registros
 
         ]
 
@@ -288,6 +512,18 @@ def buscar_criterios_ativos() -> list[dict]:
 def buscar_avaliacoes_entrevista(
     entrevista_id: int
 ) -> list[dict]:
+    """
+    Recupera todas as avaliações pertencentes
+    à entrevista.
+
+    O peso da pergunta é obtido exclusivamente
+    do snapshot:
+
+        respostas.peso_pergunta_aplicado
+
+    Nenhuma consulta ao peso atual da tabela
+    perguntas é realizada.
+    """
 
     _validar_id(
         entrevista_id,
@@ -359,13 +595,30 @@ def buscar_avaliacoes_entrevista(
 
         for registro in registros:
 
-            if registro[
-                "peso_pergunta"
-            ] is None:
+            peso_pergunta = _validar_peso(
 
-                raise ValueError(
-                    "Existe avaliação vinculada "
-                    "a resposta sem peso histórico."
+                registro[
+                    "peso_pergunta"
+                ],
+
+                "Peso histórico da pergunta"
+
+            )
+
+
+            pontuacao = registro[
+                "pontuacao"
+            ]
+
+
+            if pontuacao is not None:
+
+                pontuacao = _validar_nota(
+
+                    pontuacao,
+
+                    "Pontuação da resposta"
+
                 )
 
 
@@ -373,10 +626,14 @@ def buscar_avaliacoes_entrevista(
                 {
 
                     "id":
-                        registro["id"],
+                        registro[
+                            "id"
+                        ],
 
                     "avaliacao_id":
-                        registro["id"],
+                        registro[
+                            "id"
+                        ],
 
                     "resposta_id":
                         registro[
@@ -389,9 +646,7 @@ def buscar_avaliacoes_entrevista(
                         ],
 
                     "pontuacao":
-                        registro[
-                            "pontuacao"
-                        ],
+                        pontuacao,
 
                     "pontos_fortes":
                         registro[
@@ -419,9 +674,7 @@ def buscar_avaliacoes_entrevista(
                         ],
 
                     "peso_pergunta":
-                        registro[
-                            "peso_pergunta"
-                        ]
+                        peso_pergunta
 
                 }
             )
@@ -443,8 +696,20 @@ def buscar_notas_criterios(
     entrevista_id: int
 ) -> list[dict]:
     """
-    Recupera as notas usando exclusivamente
-    os metadados históricos do critério.
+    Recupera as notas utilizando exclusivamente
+    os snapshots históricos dos critérios
+    e das perguntas.
+
+    São utilizados:
+
+        peso_aplicado
+        criterio_nome_aplicado
+        criterio_descricao_aplicada
+        criterio_ordem_aplicada
+        peso_pergunta_aplicado
+
+    Nenhum nome, descrição ou peso atual dos
+    cadastros administrativos é utilizado.
     """
 
     _validar_id(
@@ -524,9 +789,7 @@ def buscar_notas_criterios(
         )
 
 
-        registros = (
-            cursor.fetchall()
-        )
+        registros = cursor.fetchall()
 
 
         resultados = []
@@ -534,34 +797,66 @@ def buscar_notas_criterios(
 
         for registro in registros:
 
-            if registro[
-                "peso_criterio"
-            ] is None:
+            # =================================================
+            # VALIDAR NOME HISTÓRICO
+            # =================================================
+
+            if (
+                registro[
+                    "criterio"
+                ]
+                is None
+            ):
 
                 raise ValueError(
-                    "Existe nota sem peso "
-                    "histórico do critério."
+                    "Existe nota sem nome histórico "
+                    "do critério."
                 )
 
 
-            if registro[
-                "criterio"
-            ] is None:
+            # =================================================
+            # VALIDAR NOTA
+            # =================================================
 
-                raise ValueError(
-                    "Existe nota sem nome "
-                    "histórico do critério."
-                )
+            nota = _validar_nota(
+
+                registro[
+                    "nota"
+                ],
+
+                "Nota do critério"
+
+            )
 
 
-            if registro[
-                "peso_pergunta"
-            ] is None:
+            # =================================================
+            # VALIDAR PESO DO CRITÉRIO
+            # =================================================
 
-                raise ValueError(
-                    "Existe nota vinculada a "
-                    "resposta sem peso histórico."
-                )
+            peso_criterio = _validar_peso(
+
+                registro[
+                    "peso_criterio"
+                ],
+
+                "Peso histórico do critério"
+
+            )
+
+
+            # =================================================
+            # VALIDAR PESO DA PERGUNTA
+            # =================================================
+
+            peso_pergunta = _validar_peso(
+
+                registro[
+                    "peso_pergunta"
+                ],
+
+                "Peso histórico da pergunta"
+
+            )
 
 
             resultados.append(
@@ -603,9 +898,7 @@ def buscar_notas_criterios(
                         ],
 
                     "nota":
-                        registro[
-                            "nota"
-                        ],
+                        nota,
 
                     "observacao":
                         registro[
@@ -613,14 +906,10 @@ def buscar_notas_criterios(
                         ],
 
                     "peso_criterio":
-                        registro[
-                            "peso_criterio"
-                        ],
+                        peso_criterio,
 
                     "peso_pergunta":
-                        registro[
-                            "peso_pergunta"
-                        ]
+                        peso_pergunta
 
                 }
             )
@@ -641,6 +930,10 @@ def buscar_notas_criterios(
 def contar_respostas(
     entrevista_id: int
 ) -> int:
+    """
+    Retorna a quantidade de respostas
+    existentes na entrevista.
+    """
 
     _validar_id(
         entrevista_id,
@@ -657,7 +950,8 @@ def contar_respostas(
 
         cursor.execute(
             """
-            SELECT COUNT(*) AS quantidade
+            SELECT
+                COUNT(*) AS quantidade
 
             FROM respostas
 
@@ -669,8 +963,11 @@ def contar_respostas(
         )
 
 
+        registro = cursor.fetchone()
+
+
         return int(
-            cursor.fetchone()[
+            registro[
                 "quantidade"
             ]
         )
@@ -688,6 +985,14 @@ def contar_respostas(
 def contar_respostas_avaliadas(
     entrevista_id: int
 ) -> int:
+    """
+    Retorna quantas respostas distintas
+    possuem avaliação.
+
+    COUNT(DISTINCT resposta_id) evita que
+    eventual inconsistência ou duplicidade
+    seja interpretada como outra resposta.
+    """
 
     _validar_id(
         entrevista_id,
@@ -704,7 +1009,11 @@ def contar_respostas_avaliadas(
 
         cursor.execute(
             """
-            SELECT COUNT(*) AS quantidade
+            SELECT
+
+                COUNT(
+                    DISTINCT a.resposta_id
+                ) AS quantidade
 
             FROM avaliacoes a
 
@@ -719,8 +1028,11 @@ def contar_respostas_avaliadas(
         )
 
 
+        registro = cursor.fetchone()
+
+
         return int(
-            cursor.fetchone()[
+            registro[
                 "quantidade"
             ]
         )
@@ -738,6 +1050,10 @@ def contar_respostas_avaliadas(
 def entrevista_totalmente_avaliada(
     entrevista_id: int
 ) -> bool:
+    """
+    Verifica se todas as respostas existentes
+    possuem avaliação.
+    """
 
     quantidade_respostas = (
         contar_respostas(
@@ -771,6 +1087,18 @@ def entrevista_totalmente_avaliada(
 def calcular_pontuacao_resposta(
     avaliacao_id: int
 ) -> float:
+    """
+    Calcula a pontuação consolidada
+    de uma resposta.
+
+    São utilizadas somente:
+
+    - notas históricas;
+    - pesos históricos dos critérios.
+
+    A tabela criterios_avaliacao não participa
+    deste cálculo.
+    """
 
     _validar_id(
         avaliacao_id,
@@ -788,18 +1116,23 @@ def calcular_pontuacao_resposta(
         cursor.execute(
             """
             SELECT
+
                 nota,
-                peso_aplicado AS peso
+
+                peso_aplicado
+                    AS peso
 
             FROM avaliacao_criterios
 
             WHERE avaliacao_id = ?
 
             ORDER BY
+
                 COALESCE(
                     criterio_ordem_aplicada,
                     999999
                 ),
+
                 criterio_id
             """,
             (
@@ -808,9 +1141,7 @@ def calcular_pontuacao_resposta(
         )
 
 
-        registros = (
-            cursor.fetchall()
-        )
+        registros = cursor.fetchall()
 
 
         if not registros:
@@ -821,64 +1152,69 @@ def calcular_pontuacao_resposta(
             )
 
 
+        soma_pesos = 0.0
+
+        soma_ponderada = 0.0
+
+
         for registro in registros:
 
-            if registro[
-                "peso"
-            ] is None:
+            # =================================================
+            # NOTA
+            # =================================================
 
-                raise ValueError(
-                    "A avaliação possui critério "
-                    "sem peso histórico."
-                )
+            nota = _validar_nota(
 
+                registro[
+                    "nota"
+                ],
 
-            if registro[
-                "peso"
-            ] < 0:
+                "Nota do critério"
 
-                raise ValueError(
-                    "O peso histórico do critério "
-                    "não pode ser negativo."
-                )
+            )
 
 
-        soma_pesos = sum(
+            # =================================================
+            # PESO
+            # =================================================
 
-            registro[
-                "peso"
-            ]
+            peso = _validar_peso(
 
-            for registro in registros
+                registro[
+                    "peso"
+                ],
 
-        )
+                "Peso histórico do critério"
+
+            )
+
+
+            soma_ponderada += (
+                nota
+                *
+                peso
+            )
+
+
+            soma_pesos += peso
 
 
         if soma_pesos <= 0:
 
             raise ValueError(
                 "A soma dos pesos históricos "
-                "deve ser maior que zero."
+                "dos critérios deve ser maior que zero."
             )
 
 
-        pontuacao = sum(
-
-            registro[
-                "nota"
-            ]
-            * registro[
-                "peso"
-            ]
-
-            for registro in registros
-
-        ) / soma_pesos
-
-
         return round(
-            pontuacao,
+
+            soma_ponderada
+            /
+            soma_pesos,
+
             2
+
         )
 
 
@@ -888,12 +1224,29 @@ def calcular_pontuacao_resposta(
 
 
 # ============================================================
-# ATUALIZAR PONTUAÇÕES
+# ATUALIZAR PONTUAÇÕES DAS RESPOSTAS
 # ============================================================
 
 def atualizar_pontuacoes_respostas(
     entrevista_id: int
 ) -> None:
+    """
+    Recalcula a pontuação armazenada
+    em cada avaliação.
+
+    Todos os cálculos são realizados primeiro.
+
+    Somente depois o banco é atualizado.
+
+    Isso evita atualizações parciais caso algum
+    snapshot histórico esteja inconsistente.
+    """
+
+    _validar_id(
+        entrevista_id,
+        "ID da entrevista"
+    )
+
 
     avaliacoes = (
         buscar_avaliacoes_entrevista(
@@ -902,6 +1255,48 @@ def atualizar_pontuacoes_respostas(
     )
 
 
+    if not avaliacoes:
+
+        raise ValueError(
+            "A entrevista não possui avaliações."
+        )
+
+
+    pontuacoes = []
+
+
+    # ========================================================
+    # CALCULAR TODAS AS PONTUAÇÕES ANTES DO UPDATE
+    # ========================================================
+
+    for avaliacao in avaliacoes:
+
+        avaliacao_id = (
+            avaliacao[
+                "avaliacao_id"
+            ]
+        )
+
+
+        pontuacao = (
+            calcular_pontuacao_resposta(
+                avaliacao_id
+            )
+        )
+
+
+        pontuacoes.append(
+            (
+                pontuacao,
+                avaliacao_id
+            )
+        )
+
+
+    # ========================================================
+    # ATUALIZAR EM TRANSAÇÃO
+    # ========================================================
+
     conexao = conectar_banco()
 
     cursor = conexao.cursor()
@@ -909,21 +1304,17 @@ def atualizar_pontuacoes_respostas(
 
     try:
 
-        for avaliacao in avaliacoes:
-
-            avaliacao_id = (
-                avaliacao[
-                    "avaliacao_id"
-                ]
-            )
+        cursor.execute(
+            """
+            BEGIN IMMEDIATE
+            """
+        )
 
 
-            pontuacao = (
-                calcular_pontuacao_resposta(
-                    avaliacao_id
-                )
-            )
-
+        for (
+            pontuacao,
+            avaliacao_id
+        ) in pontuacoes:
 
             cursor.execute(
                 """
@@ -938,6 +1329,14 @@ def atualizar_pontuacoes_respostas(
                     avaliacao_id
                 )
             )
+
+
+            if cursor.rowcount != 1:
+
+                raise ValueError(
+                    "Não foi possível atualizar "
+                    "uma das avaliações."
+                )
 
 
         conexao.commit()
@@ -965,6 +1364,23 @@ def atualizar_pontuacoes_respostas(
 def calcular_pontuacao_geral(
     entrevista_id: int
 ) -> float:
+    """
+    Calcula a pontuação geral da entrevista.
+
+    A pontuação de cada resposta é ponderada
+    pelo peso histórico da pergunta:
+
+        respostas.peso_pergunta_aplicado
+
+    O peso atual da tabela perguntas não
+    participa do cálculo.
+    """
+
+    _validar_id(
+        entrevista_id,
+        "ID da entrevista"
+    )
+
 
     avaliacoes = (
         buscar_avaliacoes_entrevista(
@@ -987,45 +1403,40 @@ def calcular_pontuacao_geral(
 
     for avaliacao in avaliacoes:
 
-        pontuacao = (
+        # ====================================================
+        # PONTUAÇÃO DA RESPOSTA
+        # ====================================================
+
+        pontuacao = _validar_nota(
+
             avaliacao[
                 "pontuacao"
-            ]
+            ],
+
+            "Pontuação da resposta"
+
         )
 
 
-        peso = (
+        # ====================================================
+        # PESO HISTÓRICO DA PERGUNTA
+        # ====================================================
+
+        peso = _validar_peso(
+
             avaliacao[
                 "peso_pergunta"
-            ]
+            ],
+
+            "Peso histórico da pergunta"
+
         )
-
-
-        if pontuacao is None:
-
-            raise ValueError(
-                "Existe uma resposta sem pontuação."
-            )
-
-
-        if peso is None:
-
-            raise ValueError(
-                "Existe resposta sem peso histórico."
-            )
-
-
-        if peso < 0:
-
-            raise ValueError(
-                "O peso da pergunta não pode "
-                "ser negativo."
-            )
 
 
         soma_ponderada += (
             pontuacao
-            * peso
+            *
+            peso
         )
 
 
@@ -1035,15 +1446,19 @@ def calcular_pontuacao_geral(
     if soma_pesos <= 0:
 
         raise ValueError(
-            "A soma dos pesos das perguntas "
-            "deve ser maior que zero."
+            "A soma dos pesos históricos "
+            "das perguntas deve ser maior que zero."
         )
 
 
     return round(
+
         soma_ponderada
-        / soma_pesos,
+        /
+        soma_pesos,
+
         2
+
     )
 
 
@@ -1054,6 +1469,27 @@ def calcular_pontuacao_geral(
 def calcular_desempenho_criterios(
     entrevista_id: int
 ) -> list[dict]:
+    """
+    Calcula o desempenho médio de cada
+    critério na entrevista.
+
+    As notas de cada critério são ponderadas
+    pelo peso histórico da pergunta.
+
+    Os dados apresentados também utilizam
+    snapshots:
+
+    - nome;
+    - descrição;
+    - ordem;
+    - peso do critério.
+    """
+
+    _validar_id(
+        entrevista_id,
+        "ID da entrevista"
+    )
+
 
     notas = (
         buscar_notas_criterios(
@@ -1081,6 +1517,10 @@ def calcular_desempenho_criterios(
             ]
         )
 
+
+        # ====================================================
+        # PRIMEIRA OCORRÊNCIA DO CRITÉRIO
+        # ====================================================
 
         if criterio_id not in acumuladores:
 
@@ -1123,30 +1563,111 @@ def calcular_desempenho_criterios(
             }
 
 
-        peso_pergunta = (
+        else:
+
+            # =================================================
+            # VALIDAR CONSISTÊNCIA DO SNAPSHOT
+            # =================================================
+            #
+            # Dentro de uma mesma entrevista,
+            # o mesmo critério deve possuir os
+            # mesmos dados históricos.
+            # =================================================
+
+            dados_existentes = (
+                acumuladores[
+                    criterio_id
+                ]
+            )
+
+
+            if (
+
+                dados_existentes[
+                    "criterio"
+                ]
+                != registro[
+                    "criterio"
+                ]
+
+                or
+
+                dados_existentes[
+                    "criterio_descricao"
+                ]
+                != registro[
+                    "criterio_descricao"
+                ]
+
+                or
+
+                dados_existentes[
+                    "ordem_criterio"
+                ]
+                != registro[
+                    "ordem_criterio"
+                ]
+
+                or
+
+                dados_existentes[
+                    "peso_criterio"
+                ]
+                != registro[
+                    "peso_criterio"
+                ]
+
+            ):
+
+                raise ValueError(
+                    "Foram encontrados snapshots históricos "
+                    "inconsistentes para o mesmo critério "
+                    "dentro da entrevista."
+                )
+
+
+        # ====================================================
+        # PESO HISTÓRICO DA PERGUNTA
+        # ====================================================
+
+        peso_pergunta = _validar_peso(
+
             registro[
                 "peso_pergunta"
-            ]
+            ],
+
+            "Peso histórico da pergunta"
+
         )
 
 
-        if peso_pergunta < 0:
+        # ====================================================
+        # NOTA DO CRITÉRIO
+        # ====================================================
 
-            raise ValueError(
-                "O peso da pergunta não pode "
-                "ser negativo."
-            )
+        nota = _validar_nota(
 
+            registro[
+                "nota"
+            ],
+
+            "Nota do critério"
+
+        )
+
+
+        # ====================================================
+        # ACUMULAR
+        # ====================================================
 
         acumuladores[
             criterio_id
         ][
             "soma"
         ] += (
-            registro[
-                "nota"
-            ]
-            * peso_pergunta
+            nota
+            *
+            peso_pergunta
         )
 
 
@@ -1154,9 +1675,7 @@ def calcular_desempenho_criterios(
             criterio_id
         ][
             "soma_pesos"
-        ] += (
-            peso_pergunta
-        )
+        ] += peso_pergunta
 
 
         acumuladores[
@@ -1166,27 +1685,42 @@ def calcular_desempenho_criterios(
         ] += 1
 
 
+    # ========================================================
+    # GERAR RESULTADO
+    # ========================================================
+
     resultados = []
 
 
     for dados in acumuladores.values():
 
-        if dados[
-            "soma_pesos"
-        ] <= 0:
+        if (
+            dados[
+                "soma_pesos"
+            ]
+            <= 0
+        ):
 
-            media = 0.0
-
-        else:
-
-            media = (
-                dados[
-                    "soma"
-                ]
-                / dados[
-                    "soma_pesos"
-                ]
+            raise ValueError(
+                "A soma dos pesos históricos das perguntas "
+                "deve ser maior que zero para calcular "
+                "o desempenho do critério."
             )
+
+
+        media = (
+
+            dados[
+                "soma"
+            ]
+
+            /
+
+            dados[
+                "soma_pesos"
+            ]
+
+        )
 
 
         resultados.append(
@@ -1232,19 +1766,30 @@ def calcular_desempenho_criterios(
         )
 
 
+    # ========================================================
+    # ORDENAR
+    # ========================================================
+
     resultados.sort(
         key=lambda item: (
+
             item[
                 "ordem_criterio"
             ]
-            if item[
-                "ordem_criterio"
-            ] is not None
+
+            if (
+                item[
+                    "ordem_criterio"
+                ]
+                is not None
+            )
+
             else 999999,
 
             item[
                 "criterio_id"
             ]
+
         )
     )
 
@@ -1253,21 +1798,36 @@ def calcular_desempenho_criterios(
 
 
 # ============================================================
-# CLASSIFICAÇÃO
+# CLASSIFICAR DESEMPENHO
 # ============================================================
 
 def classificar_desempenho(
     pontuacao: float
 ) -> str:
+    """
+    Classifica a pontuação final utilizando
+    a escala definida pelo sistema.
 
-    if (
-        pontuacao < NOTA_MINIMA
-        or pontuacao > NOTA_MAXIMA
-    ):
+    0 até < 5:
+        Necessita desenvolvimento
 
-        raise ValueError(
-            "A pontuação deve estar entre 0 e 10."
-        )
+    5 até < 7:
+        Regular
+
+    7 até < 8.5:
+        Bom
+
+    8.5 até 10:
+        Muito bom
+    """
+
+    pontuacao = _validar_nota(
+
+        pontuacao,
+
+        "Pontuação"
+
+    )
 
 
     if pontuacao < 5.0:
@@ -1291,12 +1851,18 @@ def classificar_desempenho(
 
 
 # ============================================================
-# DESTAQUES
+# IDENTIFICAR DESTAQUES
 # ============================================================
 
 def identificar_destaques(
     desempenho_criterios: list[dict]
 ) -> dict:
+    """
+    Identifica:
+
+    - critério com melhor desempenho;
+    - critério com menor desempenho.
+    """
 
     if not desempenho_criterios:
 
@@ -1369,13 +1935,19 @@ def identificar_destaques(
 
 
 # ============================================================
-# ATUALIZAR RESULTADO
+# ATUALIZAR RESULTADO DA ENTREVISTA
 # ============================================================
 
 def atualizar_resultado_entrevista(
     entrevista_id: int,
     pontuacao_final: float
 ) -> None:
+    """
+    Registra a pontuação final e altera
+    o status da entrevista para:
+
+        avaliada
+    """
 
     _validar_id(
         entrevista_id,
@@ -1383,14 +1955,13 @@ def atualizar_resultado_entrevista(
     )
 
 
-    if (
-        pontuacao_final < NOTA_MINIMA
-        or pontuacao_final > NOTA_MAXIMA
-    ):
+    pontuacao_final = _validar_nota(
 
-        raise ValueError(
-            "Pontuação final inválida."
-        )
+        pontuacao_final,
+
+        "Pontuação final"
+
+    )
 
 
     conexao = conectar_banco()
@@ -1405,7 +1976,9 @@ def atualizar_resultado_entrevista(
             UPDATE entrevistas
 
             SET
+
                 pontuacao_final = ?,
+
                 status = 'avaliada'
 
             WHERE id = ?
@@ -1417,7 +1990,7 @@ def atualizar_resultado_entrevista(
         )
 
 
-        if cursor.rowcount == 0:
+        if cursor.rowcount != 1:
 
             raise ValueError(
                 "Entrevista não encontrada."
@@ -1449,12 +2022,36 @@ def atualizar_resultado_entrevista(
 def processar_avaliacao(
     entrevista_id: int
 ) -> dict:
+    """
+    Executa o Motor de Pontuação completo.
+
+    Fluxo:
+
+    1. verifica a entrevista;
+    2. verifica seu status;
+    3. confirma que todas as respostas existentes
+       possuem avaliação;
+    4. recalcula as pontuações das respostas;
+    5. calcula a pontuação geral;
+    6. calcula o desempenho por critério;
+    7. classifica o desempenho;
+    8. identifica destaques;
+    9. atualiza a pontuação final;
+    10. altera o status para avaliada;
+    11. retorna o resultado consolidado.
+
+    Todos os cálculos utilizam dados históricos.
+    """
 
     _validar_id(
         entrevista_id,
         "ID da entrevista"
     )
 
+
+    # ========================================================
+    # BUSCAR ENTREVISTA
+    # ========================================================
 
     entrevista = buscar_entrevista(
         entrevista_id
@@ -1467,6 +2064,10 @@ def processar_avaliacao(
             "Entrevista não encontrada."
         )
 
+
+    # ========================================================
+    # VALIDAR STATUS
+    # ========================================================
 
     if entrevista[
         "status"
@@ -1488,6 +2089,10 @@ def processar_avaliacao(
         )
 
 
+    # ========================================================
+    # VERIFICAR SE TODAS AS RESPOSTAS FORAM AVALIADAS
+    # ========================================================
+
     if not entrevista_totalmente_avaliada(
         entrevista_id
     ):
@@ -1498,10 +2103,18 @@ def processar_avaliacao(
         )
 
 
+    # ========================================================
+    # RECALCULAR PONTUAÇÕES DAS RESPOSTAS
+    # ========================================================
+
     atualizar_pontuacoes_respostas(
         entrevista_id
     )
 
+
+    # ========================================================
+    # CALCULAR PONTUAÇÃO FINAL
+    # ========================================================
 
     pontuacao_final = (
         calcular_pontuacao_geral(
@@ -1510,12 +2123,20 @@ def processar_avaliacao(
     )
 
 
+    # ========================================================
+    # CALCULAR DESEMPENHO DOS CRITÉRIOS
+    # ========================================================
+
     desempenho_criterios = (
         calcular_desempenho_criterios(
             entrevista_id
         )
     )
 
+
+    # ========================================================
+    # CLASSIFICAR
+    # ========================================================
 
     classificacao = (
         classificar_desempenho(
@@ -1524,6 +2145,10 @@ def processar_avaliacao(
     )
 
 
+    # ========================================================
+    # IDENTIFICAR DESTAQUES
+    # ========================================================
+
     destaques = (
         identificar_destaques(
             desempenho_criterios
@@ -1531,16 +2156,39 @@ def processar_avaliacao(
     )
 
 
+    # ========================================================
+    # ATUALIZAR ENTREVISTA
+    # ========================================================
+
     atualizar_resultado_entrevista(
         entrevista_id,
         pontuacao_final
     )
 
 
+    # ========================================================
+    # RETORNO
+    # ========================================================
+
     return {
 
         "entrevista_id":
             entrevista_id,
+
+        "tipo_entrevista":
+            entrevista[
+                "tipo_entrevista"
+            ],
+
+        "area_tecnica":
+            entrevista[
+                "area_tecnica"
+            ],
+
+        "subarea_tecnica":
+            entrevista[
+                "subarea_tecnica"
+            ],
 
         "pontuacao_final":
             pontuacao_final,

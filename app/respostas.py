@@ -4,42 +4,27 @@ respostas.py
 Módulo responsável pelo gerenciamento das respostas
 fornecidas pelos estudantes durante as entrevistas.
 
-Versão: 0.3
-
 Responsabilidades:
 
 - salvar respostas;
+- validar se a pergunta pertence à entrevista;
+- utilizar o snapshot congelado da pergunta;
 - buscar respostas;
 - listar respostas de uma entrevista;
 - disponibilizar o snapshot histórico da pergunta;
 - editar respostas enquanto a entrevista estiver aberta;
 - excluir respostas enquanto a entrevista estiver aberta;
 - verificar se determinada pergunta já foi respondida;
-- tratar com segurança respostas concorrentes para
-  a mesma pergunta.
+- contar respostas de uma entrevista;
+- tratar tentativas simultâneas de resposta duplicada.
 
-As respostas somente poderão ser alteradas enquanto
-a entrevista estiver com status "em_andamento".
+A partir da implementação de entrevista_perguntas,
+uma resposta somente pode ser registrada para uma
+pergunta que tenha sido congelada no início daquela
+entrevista.
 
-CONCORRÊNCIA:
-
-A tabela respostas possui restrição UNIQUE para:
-
-    entrevista_id + pergunta_id
-
-A verificação realizada antes do INSERT melhora a
-mensagem apresentada em situações normais.
-
-Entretanto, duas requisições concorrentes podem executar
-a verificação ao mesmo tempo.
-
-Nesse cenário, o próprio SQLite garante a integridade
-através da restrição UNIQUE.
-
-Quando essa violação específica ocorrer, este módulo
-converte o sqlite3.IntegrityError em ValueError para que
-a camada HTTP retorne um erro de domínio controlado,
-em vez de HTTP 500.
+Isso significa que o sistema não depende mais do estado
+atual do cadastro de perguntas durante uma entrevista.
 """
 
 import sqlite3
@@ -60,6 +45,85 @@ except ImportError:
 
 
 # ============================================================
+# VALIDAR ID
+# ============================================================
+
+def _validar_id(
+    valor: int | None,
+    campo: str
+) -> None:
+    """
+    Valida identificadores numéricos.
+    """
+
+    if (
+        valor is None
+        or valor <= 0
+    ):
+
+        raise ValueError(
+            f"{campo} inválido."
+        )
+
+
+# ============================================================
+# VALIDAR TEXTO DA RESPOSTA
+# ============================================================
+
+def _validar_texto_resposta(
+    texto_resposta: str
+) -> str:
+    """
+    Valida e normaliza o texto da resposta.
+    """
+
+    if texto_resposta is None:
+
+        raise ValueError(
+            "A resposta é obrigatória."
+        )
+
+
+    texto = texto_resposta.strip()
+
+
+    if not texto:
+
+        raise ValueError(
+            "A resposta não pode estar vazia."
+        )
+
+
+    return texto
+
+
+# ============================================================
+# VALIDAR TEMPO
+# ============================================================
+
+def _validar_tempo_resposta(
+    tempo_resposta: int | None
+) -> None:
+    """
+    Valida o tempo informado para a resposta.
+    """
+
+    if (
+
+        tempo_resposta is not None
+
+        and
+
+        tempo_resposta < 0
+
+    ):
+
+        raise ValueError(
+            "O tempo de resposta não pode ser negativo."
+        )
+
+
+# ============================================================
 # SALVAR RESPOSTA
 # ============================================================
 
@@ -72,57 +136,47 @@ def salvar_resposta(
     """
     Registra uma resposta no banco.
 
+    A pergunta precisa obrigatoriamente fazer
+    parte de entrevista_perguntas.
+
+    O snapshot da resposta é copiado diretamente
+    do conjunto congelado da entrevista.
+
+    Portanto, mudanças posteriores no cadastro
+    original da pergunta não afetam a resposta.
+
     Retorna o ID da resposta criada.
-
-    Em caso de duas gravações concorrentes para a mesma
-    combinação entrevista + pergunta, a restrição UNIQUE
-    do SQLite impede a duplicidade.
-
-    Essa violação específica é convertida em ValueError
-    para tratamento adequado pela API.
     """
 
-    # --------------------------------------------------------
-    # VALIDAÇÕES BÁSICAS
-    # --------------------------------------------------------
+    # ========================================================
+    # VALIDAÇÕES
+    # ========================================================
 
-    if entrevista_id <= 0:
-
-        raise ValueError(
-            "A entrevista informada é inválida."
-        )
-
-
-    if pergunta_id <= 0:
-
-        raise ValueError(
-            "A pergunta informada é inválida."
-        )
+    _validar_id(
+        entrevista_id,
+        "Entrevista"
+    )
 
 
-    if texto_resposta is None:
-
-        raise ValueError(
-            "A resposta é obrigatória."
-        )
-
-
-    if not texto_resposta.strip():
-
-        raise ValueError(
-            "A resposta não pode estar vazia."
-        )
+    _validar_id(
+        pergunta_id,
+        "Pergunta"
+    )
 
 
-    if (
-        tempo_resposta is not None
-        and tempo_resposta < 0
-    ):
+    texto = _validar_texto_resposta(
+        texto_resposta
+    )
 
-        raise ValueError(
-            "O tempo de resposta não pode ser negativo."
-        )
 
+    _validar_tempo_resposta(
+        tempo_resposta
+    )
+
+
+    # ========================================================
+    # CONEXÃO
+    # ========================================================
 
     conexao = conectar_banco()
 
@@ -131,15 +185,26 @@ def salvar_resposta(
 
     try:
 
-        # ----------------------------------------------------
+        # ====================================================
+        # TRANSAÇÃO
+        # ====================================================
+
+        cursor.execute(
+            """
+            BEGIN IMMEDIATE
+            """
+        )
+
+
+        # ====================================================
         # VERIFICAR ENTREVISTA
-        # ----------------------------------------------------
+        # ====================================================
 
         cursor.execute(
             """
             SELECT
+
                 id,
-                tipo_entrevista_id,
                 status
 
             FROM entrevistas
@@ -162,86 +227,67 @@ def salvar_resposta(
             )
 
 
-        if entrevista["status"] != "em_andamento":
+        if (
+            entrevista[
+                "status"
+            ]
+            != "em_andamento"
+        ):
 
             raise ValueError(
+
                 "Não é possível registrar respostas "
                 "em uma entrevista que não esteja "
                 "em andamento."
+
             )
 
 
-        # ----------------------------------------------------
-        # VERIFICAR PERGUNTA
-        # ----------------------------------------------------
+        # ====================================================
+        # VERIFICAR PERGUNTA CONGELADA
+        # ====================================================
 
         cursor.execute(
             """
             SELECT
+
                 id,
-                tipo_entrevista_id,
-                ativa
 
-            FROM perguntas
+                entrevista_id,
 
-            WHERE id = ?
-            """,
-            (
                 pergunta_id,
-            )
-        )
 
+                pergunta_texto_aplicado,
 
-        pergunta = cursor.fetchone()
+                exemplo_esperado_aplicado,
 
+                competencia_id_aplicada,
 
-        if pergunta is None:
+                competencia_nome_aplicada,
 
-            raise ValueError(
-                "Pergunta não encontrada."
-            )
+                area_tecnica_id_aplicada,
 
+                area_tecnica_nome_aplicada,
 
-        if pergunta["ativa"] != 1:
+                subarea_tecnica_id_aplicada,
 
-            raise ValueError(
-                "A pergunta informada está inativa."
-            )
+                subarea_tecnica_nome_aplicada,
 
+                peso_pergunta_aplicado,
 
-        # ----------------------------------------------------
-        # VERIFICAR SE A PERGUNTA PERTENCE AO TIPO
-        # DA ENTREVISTA
-        # ----------------------------------------------------
+                usa_star_aplicado,
 
-        if (
-            pergunta["tipo_entrevista_id"]
-            != entrevista["tipo_entrevista_id"]
-        ):
+                ordem_pergunta_aplicada
 
-            raise ValueError(
-                "A pergunta não pertence ao tipo "
-                "desta entrevista."
-            )
+            FROM entrevista_perguntas
 
+            WHERE
+                entrevista_id = ?
 
-        # ----------------------------------------------------
-        # VERIFICAR RESPOSTA DUPLICADA
-        #
-        # Esta verificação cobre o fluxo normal.
-        #
-        # A restrição UNIQUE do banco continua sendo
-        # responsável por proteger contra concorrência.
-        # ----------------------------------------------------
+              AND
+                pergunta_id = ?
 
-        cursor.execute(
-            """
-            SELECT id
-
-            FROM respostas
-
-            WHERE entrevista_id = ?
-              AND pergunta_id = ?
+            LIMIT 1
             """,
             (
                 entrevista_id,
@@ -250,101 +296,280 @@ def salvar_resposta(
         )
 
 
-        if cursor.fetchone() is not None:
+        pergunta_aplicada = (
+            cursor.fetchone()
+        )
+
+
+        if pergunta_aplicada is None:
 
             raise ValueError(
-                "Esta pergunta já possui uma resposta "
-                "registrada nesta entrevista."
+
+                "A pergunta informada não pertence "
+                "ao conjunto de perguntas desta entrevista."
+
             )
 
 
-        # ----------------------------------------------------
-        # SALVAR
-        # ----------------------------------------------------
+        # ====================================================
+        # VALIDAR SNAPSHOT
+        # ====================================================
+
+        if (
+            pergunta_aplicada[
+                "pergunta_texto_aplicado"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A pergunta da entrevista não possui "
+                "snapshot histórico válido."
+            )
+
+
+        if (
+            pergunta_aplicada[
+                "competencia_id_aplicada"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A pergunta da entrevista não possui "
+                "competência histórica válida."
+            )
+
+
+        if (
+            pergunta_aplicada[
+                "competencia_nome_aplicada"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A pergunta da entrevista não possui "
+                "nome histórico da competência."
+            )
+
+
+        if (
+            pergunta_aplicada[
+                "peso_pergunta_aplicado"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A pergunta da entrevista não possui "
+                "peso histórico válido."
+            )
+
+
+        if (
+            pergunta_aplicada[
+                "usa_star_aplicado"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A pergunta da entrevista não possui "
+                "configuração histórica do método STAR."
+            )
+
+
+        # ====================================================
+        # VERIFICAR RESPOSTA DUPLICADA
+        # ====================================================
 
         cursor.execute(
             """
-            INSERT INTO respostas (
-                entrevista_id,
-                pergunta_id,
-                texto_resposta,
-                tempo_resposta
-            )
+            SELECT id
 
-            VALUES (?, ?, ?, ?)
+            FROM respostas
+
+            WHERE
+                entrevista_id = ?
+
+              AND
+                pergunta_id = ?
+
+            LIMIT 1
             """,
             (
                 entrevista_id,
-                pergunta_id,
-                texto_resposta.strip(),
-                tempo_resposta
+                pergunta_id
             )
         )
 
 
-        resposta_id = cursor.lastrowid
+        if (
+            cursor.fetchone()
+            is not None
+        ):
 
+            raise ValueError(
+
+                "Esta pergunta já possui uma resposta "
+                "registrada nesta entrevista."
+
+            )
+
+
+        # ====================================================
+        # SALVAR RESPOSTA + SNAPSHOT
+        # ====================================================
+
+        try:
+
+            cursor.execute(
+                """
+                INSERT INTO respostas (
+
+                    entrevista_id,
+
+                    pergunta_id,
+
+                    texto_resposta,
+
+                    tempo_resposta,
+
+                    pergunta_texto_aplicado,
+
+                    exemplo_esperado_aplicado,
+
+                    competencia_id_aplicada,
+
+                    competencia_nome_aplicada,
+
+                    peso_pergunta_aplicado,
+
+                    usa_star_aplicado,
+
+                    ordem_pergunta_aplicada
+
+                )
+
+                VALUES (
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?
+                )
+                """,
+                (
+
+                    entrevista_id,
+
+                    pergunta_id,
+
+                    texto,
+
+                    tempo_resposta,
+
+                    pergunta_aplicada[
+                        "pergunta_texto_aplicado"
+                    ],
+
+                    pergunta_aplicada[
+                        "exemplo_esperado_aplicado"
+                    ],
+
+                    pergunta_aplicada[
+                        "competencia_id_aplicada"
+                    ],
+
+                    pergunta_aplicada[
+                        "competencia_nome_aplicada"
+                    ],
+
+                    pergunta_aplicada[
+                        "peso_pergunta_aplicado"
+                    ],
+
+                    pergunta_aplicada[
+                        "usa_star_aplicado"
+                    ],
+
+                    pergunta_aplicada[
+                        "ordem_pergunta_aplicada"
+                    ]
+
+                )
+            )
+
+
+        except sqlite3.IntegrityError as erro:
+
+            # ------------------------------------------------
+            # PROTEÇÃO DE CONCORRÊNCIA
+            # ------------------------------------------------
+            #
+            # Mesmo que duas requisições tentem responder
+            # à mesma pergunta praticamente ao mesmo tempo,
+            # o UNIQUE(entrevista_id, pergunta_id) do banco
+            # permanece como a proteção definitiva.
+            # ------------------------------------------------
+
+            mensagem = str(
+                erro
+            ).lower()
+
+
+            if (
+
+                "unique constraint failed"
+                in mensagem
+
+                and
+
+                "respostas.entrevista_id"
+                in mensagem
+
+                and
+
+                "respostas.pergunta_id"
+                in mensagem
+
+            ):
+
+                raise ValueError(
+
+                    "Esta pergunta já possui uma resposta "
+                    "registrada nesta entrevista."
+
+                ) from erro
+
+
+            raise
+
+
+        # ====================================================
+        # ID
+        # ====================================================
+
+        resposta_id = int(
+            cursor.lastrowid
+        )
+
+
+        # ====================================================
+        # CONFIRMAR
+        # ====================================================
 
         conexao.commit()
 
 
         return resposta_id
-
-
-    # ========================================================
-    # CONFLITO DE CONCORRÊNCIA
-    # ========================================================
-
-    except sqlite3.IntegrityError as erro:
-
-        conexao.rollback()
-
-
-        mensagem_erro = str(
-            erro
-        )
-
-
-        # ----------------------------------------------------
-        # DUPLICIDADE:
-        #
-        # UNIQUE (
-        #     entrevista_id,
-        #     pergunta_id
-        # )
-        #
-        # Duas requisições podem passar pelo SELECT acima
-        # simultaneamente.
-        #
-        # Nesse caso, somente uma consegue realizar o INSERT.
-        # A segunda chega aqui.
-        # ----------------------------------------------------
-
-        if (
-            "UNIQUE constraint failed"
-            in mensagem_erro
-
-            and "respostas.entrevista_id"
-            in mensagem_erro
-
-            and "respostas.pergunta_id"
-            in mensagem_erro
-        ):
-
-            raise ValueError(
-                "Esta pergunta já possui uma resposta "
-                "registrada nesta entrevista."
-            ) from erro
-
-
-        # ----------------------------------------------------
-        # OUTRAS VIOLAÇÕES DE INTEGRIDADE
-        #
-        # Não devem ser escondidas como se fossem
-        # duplicidade de resposta.
-        # ----------------------------------------------------
-
-        raise
 
 
     except ValueError:
@@ -376,6 +601,12 @@ def buscar_resposta(
     """
     Busca uma resposta pelo ID.
     """
+
+    _validar_id(
+        resposta_id,
+        "ID da resposta"
+    )
+
 
     conexao = conectar_banco()
 
@@ -425,9 +656,21 @@ def buscar_resposta_pergunta(
     pergunta_id: int
 ) -> Resposta | None:
     """
-    Retorna a resposta de uma determinada pergunta
+    Retorna a resposta de determinada pergunta
     dentro de uma entrevista.
     """
+
+    _validar_id(
+        entrevista_id,
+        "Entrevista"
+    )
+
+
+    _validar_id(
+        pergunta_id,
+        "Pergunta"
+    )
+
 
     conexao = conectar_banco()
 
@@ -442,8 +685,13 @@ def buscar_resposta_pergunta(
 
             FROM respostas
 
-            WHERE entrevista_id = ?
-              AND pergunta_id = ?
+            WHERE
+                entrevista_id = ?
+
+              AND
+                pergunta_id = ?
+
+            LIMIT 1
             """,
             (
                 entrevista_id,
@@ -478,22 +726,19 @@ def buscar_snapshot_resposta(
     resposta_id: int
 ) -> dict | None:
     """
-    Recupera a resposta juntamente com o snapshot
-    histórico da pergunta utilizado no momento em
-    que a resposta foi registrada.
+    Recupera uma resposta juntamente com
+    o snapshot histórico da pergunta.
 
-    Os dados retornados não dependem do estado atual
-    da tabela perguntas.
+    O retorno não depende da tabela perguntas.
 
-    Isso garante que alterações administrativas
-    posteriores não modifiquem entrevistas antigas.
+    Dessa forma, alterações administrativas
+    posteriores não alteram entrevistas antigas.
     """
 
-    if resposta_id <= 0:
-
-        raise ValueError(
-            "O ID da resposta é inválido."
-        )
+    _validar_id(
+        resposta_id,
+        "ID da resposta"
+    )
 
 
     conexao = conectar_banco()
@@ -506,18 +751,31 @@ def buscar_snapshot_resposta(
         cursor.execute(
             """
             SELECT
+
                 id,
+
                 entrevista_id,
+
                 pergunta_id,
+
                 texto_resposta,
+
                 tempo_resposta,
+
                 data_resposta,
+
                 pergunta_texto_aplicado,
+
                 exemplo_esperado_aplicado,
+
                 competencia_id_aplicada,
+
                 competencia_nome_aplicada,
+
                 peso_pergunta_aplicado,
+
                 usa_star_aplicado,
+
                 ordem_pergunta_aplicada
 
             FROM respostas
@@ -538,65 +796,130 @@ def buscar_snapshot_resposta(
             return None
 
 
+        # ====================================================
+        # VALIDAR SNAPSHOT
+        # ====================================================
+
         if (
-            registro["pergunta_texto_aplicado"] is None
-            or registro["competencia_id_aplicada"] is None
-            or registro["competencia_nome_aplicada"] is None
-            or registro["peso_pergunta_aplicado"] is None
-            or registro["usa_star_aplicado"] is None
+            registro[
+                "pergunta_texto_aplicado"
+            ]
+            is None
+
+            or
+
+            registro[
+                "competencia_id_aplicada"
+            ]
+            is None
+
+            or
+
+            registro[
+                "competencia_nome_aplicada"
+            ]
+            is None
+
+            or
+
+            registro[
+                "peso_pergunta_aplicado"
+            ]
+            is None
+
+            or
+
+            registro[
+                "usa_star_aplicado"
+            ]
+            is None
         ):
 
             raise ValueError(
+
                 "A resposta não possui snapshot histórico "
                 "completo da pergunta."
+
             )
 
+
+        # ====================================================
+        # RETORNO
+        # ====================================================
 
         return {
 
             "id":
-                registro["id"],
+                registro[
+                    "id"
+                ],
 
             "resposta_id":
-                registro["id"],
+                registro[
+                    "id"
+                ],
 
             "entrevista_id":
-                registro["entrevista_id"],
+                registro[
+                    "entrevista_id"
+                ],
 
             "pergunta_id":
-                registro["pergunta_id"],
+                registro[
+                    "pergunta_id"
+                ],
 
             "pergunta":
-                registro["pergunta_texto_aplicado"],
+                registro[
+                    "pergunta_texto_aplicado"
+                ],
 
             "exemplo_esperado":
-                registro["exemplo_esperado_aplicado"],
+                registro[
+                    "exemplo_esperado_aplicado"
+                ],
 
             "competencia_id":
-                registro["competencia_id_aplicada"],
+                registro[
+                    "competencia_id_aplicada"
+                ],
 
             "competencia":
-                registro["competencia_nome_aplicada"],
+                registro[
+                    "competencia_nome_aplicada"
+                ],
 
             "peso_pergunta":
-                registro["peso_pergunta_aplicado"],
+                registro[
+                    "peso_pergunta_aplicado"
+                ],
 
             "usa_star":
                 bool(
-                    registro["usa_star_aplicado"]
+                    registro[
+                        "usa_star_aplicado"
+                    ]
                 ),
 
             "ordem_pergunta":
-                registro["ordem_pergunta_aplicada"],
+                registro[
+                    "ordem_pergunta_aplicada"
+                ],
 
             "texto_resposta":
-                registro["texto_resposta"],
+                registro[
+                    "texto_resposta"
+                ],
 
             "tempo_resposta":
-                registro["tempo_resposta"],
+                registro[
+                    "tempo_resposta"
+                ],
 
             "data_resposta":
-                registro["data_resposta"]
+                registro[
+                    "data_resposta"
+                ]
 
         }
 
@@ -621,6 +944,12 @@ def listar_respostas_entrevista(
     histórica armazenada no snapshot da pergunta.
     """
 
+    _validar_id(
+        entrevista_id,
+        "Entrevista"
+    )
+
+
     conexao = conectar_banco()
 
     cursor = conexao.cursor()
@@ -630,17 +959,21 @@ def listar_respostas_entrevista(
 
         cursor.execute(
             """
-            SELECT r.*
+            SELECT
+                r.*
 
             FROM respostas r
 
-            WHERE r.entrevista_id = ?
+            WHERE
+                r.entrevista_id = ?
 
             ORDER BY
+
                 COALESCE(
                     r.ordem_pergunta_aplicada,
                     999999
                 ),
+
                 r.id
             """,
             (
@@ -658,7 +991,8 @@ def listar_respostas_entrevista(
                 registro
             )
 
-            for registro in registros
+            for registro
+            in registros
 
         ]
 
@@ -680,32 +1014,26 @@ def editar_resposta(
     """
     Altera uma resposta existente.
 
-    Somente respostas de entrevistas em andamento
-    podem ser alteradas.
+    Somente respostas de entrevistas
+    em andamento podem ser alteradas.
+
+    Os snapshots históricos não são modificados.
     """
 
-    if novo_texto is None:
-
-        raise ValueError(
-            "A resposta é obrigatória."
-        )
-
-
-    if not novo_texto.strip():
-
-        raise ValueError(
-            "A resposta não pode estar vazia."
-        )
+    _validar_id(
+        resposta_id,
+        "ID da resposta"
+    )
 
 
-    if (
-        tempo_resposta is not None
-        and tempo_resposta < 0
-    ):
+    texto = _validar_texto_resposta(
+        novo_texto
+    )
 
-        raise ValueError(
-            "O tempo de resposta não pode ser negativo."
-        )
+
+    _validar_tempo_resposta(
+        tempo_resposta
+    )
 
 
     conexao = conectar_banco()
@@ -715,18 +1043,31 @@ def editar_resposta(
 
     try:
 
-        # ----------------------------------------------------
-        # VERIFICAR STATUS DA ENTREVISTA
-        # ----------------------------------------------------
+        cursor.execute(
+            """
+            BEGIN IMMEDIATE
+            """
+        )
+
+
+        # ====================================================
+        # VERIFICAR STATUS
+        # ====================================================
 
         cursor.execute(
             """
-            SELECT e.status
+            SELECT
+
+                r.id,
+
+                e.status
 
             FROM respostas r
 
             INNER JOIN entrevistas e
-                ON e.id = r.entrevista_id
+
+                ON e.id =
+                    r.entrevista_id
 
             WHERE r.id = ?
             """,
@@ -746,40 +1087,54 @@ def editar_resposta(
             )
 
 
-        if registro["status"] != "em_andamento":
+        if (
+            registro[
+                "status"
+            ]
+            != "em_andamento"
+        ):
 
             raise ValueError(
+
                 "A resposta não pode ser alterada porque "
                 "a entrevista já foi encerrada."
+
             )
 
 
-        # ----------------------------------------------------
-        # ATUALIZAR RESPOSTA
-        # ----------------------------------------------------
+        # ====================================================
+        # ATUALIZAR SOMENTE DADOS EDITÁVEIS
+        # ====================================================
 
         cursor.execute(
             """
             UPDATE respostas
 
             SET
+
                 texto_resposta = ?,
+
                 tempo_resposta = ?
 
             WHERE id = ?
             """,
             (
-                novo_texto.strip(),
+                texto,
                 tempo_resposta,
                 resposta_id
             )
         )
 
 
+        alterada = (
+            cursor.rowcount > 0
+        )
+
+
         conexao.commit()
 
 
-        return cursor.rowcount > 0
+        return alterada
 
 
     except (
@@ -807,9 +1162,18 @@ def excluir_resposta(
     """
     Exclui uma resposta.
 
-    Somente respostas de entrevistas em andamento
-    podem ser excluídas.
+    Somente respostas de entrevistas
+    em andamento podem ser excluídas.
+
+    O conjunto congelado de perguntas
+    não é alterado.
     """
+
+    _validar_id(
+        resposta_id,
+        "ID da resposta"
+    )
+
 
     conexao = conectar_banco()
 
@@ -820,12 +1184,25 @@ def excluir_resposta(
 
         cursor.execute(
             """
-            SELECT e.status
+            BEGIN IMMEDIATE
+            """
+        )
+
+
+        cursor.execute(
+            """
+            SELECT
+
+                r.id,
+
+                e.status
 
             FROM respostas r
 
             INNER JOIN entrevistas e
-                ON e.id = r.entrevista_id
+
+                ON e.id =
+                    r.entrevista_id
 
             WHERE r.id = ?
             """,
@@ -840,14 +1217,23 @@ def excluir_resposta(
 
         if registro is None:
 
+            conexao.rollback()
+
             return False
 
 
-        if registro["status"] != "em_andamento":
+        if (
+            registro[
+                "status"
+            ]
+            != "em_andamento"
+        ):
 
             raise ValueError(
+
                 "A resposta não pode ser excluída porque "
                 "a entrevista já foi encerrada."
+
             )
 
 
@@ -863,10 +1249,15 @@ def excluir_resposta(
         )
 
 
+        excluida = (
+            cursor.rowcount > 0
+        )
+
+
         conexao.commit()
 
 
-        return cursor.rowcount > 0
+        return excluida
 
 
     except (
@@ -893,9 +1284,21 @@ def pergunta_respondida(
     pergunta_id: int
 ) -> bool:
     """
-    Verifica se uma pergunta já possui resposta
-    dentro da entrevista.
+    Verifica se uma pergunta já possui
+    resposta dentro da entrevista.
     """
+
+    _validar_id(
+        entrevista_id,
+        "Entrevista"
+    )
+
+
+    _validar_id(
+        pergunta_id,
+        "Pergunta"
+    )
+
 
     conexao = conectar_banco()
 
@@ -910,8 +1313,11 @@ def pergunta_respondida(
 
             FROM respostas
 
-            WHERE entrevista_id = ?
-              AND pergunta_id = ?
+            WHERE
+                entrevista_id = ?
+
+              AND
+                pergunta_id = ?
 
             LIMIT 1
             """,
@@ -922,7 +1328,10 @@ def pergunta_respondida(
         )
 
 
-        return cursor.fetchone() is not None
+        return (
+            cursor.fetchone()
+            is not None
+        )
 
 
     finally:
@@ -938,9 +1347,15 @@ def contar_respostas_entrevista(
     entrevista_id: int
 ) -> int:
     """
-    Retorna a quantidade de respostas existentes
-    em uma entrevista.
+    Retorna a quantidade de respostas
+    existentes em uma entrevista.
     """
+
+    _validar_id(
+        entrevista_id,
+        "Entrevista"
+    )
+
 
     conexao = conectar_banco()
 
@@ -966,7 +1381,85 @@ def contar_respostas_entrevista(
         registro = cursor.fetchone()
 
 
-        return registro["quantidade"]
+        return int(
+            registro[
+                "quantidade"
+            ]
+        )
+
+
+    finally:
+
+        conexao.close()
+
+
+# ============================================================
+# CONTAR RESPOSTAS PENDENTES
+# ============================================================
+
+def contar_respostas_pendentes(
+    entrevista_id: int
+) -> int:
+    """
+    Retorna quantas perguntas congeladas ainda
+    não possuem resposta.
+
+    Esta função poderá ser utilizada pelo
+    frontend para mostrar o progresso.
+    """
+
+    _validar_id(
+        entrevista_id,
+        "Entrevista"
+    )
+
+
+    conexao = conectar_banco()
+
+    cursor = conexao.cursor()
+
+
+    try:
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS quantidade
+
+            FROM entrevista_perguntas ep
+
+            WHERE
+                ep.entrevista_id = ?
+
+              AND NOT EXISTS (
+
+                    SELECT 1
+
+                    FROM respostas r
+
+                    WHERE
+                        r.entrevista_id =
+                            ep.entrevista_id
+
+                      AND
+                        r.pergunta_id =
+                            ep.pergunta_id
+
+              )
+            """,
+            (
+                entrevista_id,
+            )
+        )
+
+
+        registro = cursor.fetchone()
+
+
+        return int(
+            registro[
+                "quantidade"
+            ]
+        )
 
 
     finally:
@@ -982,12 +1475,21 @@ def _registro_para_resposta(
     registro: sqlite3.Row
 ) -> Resposta:
     """
-    Converte um registro SQLite em objeto Resposta.
+    Converte um registro SQLite
+    em objeto Resposta.
+
+    Também carrega os snapshots históricos
+    armazenados na própria resposta.
     """
+
+    colunas = registro.keys()
+
 
     return Resposta(
 
-        id=registro["id"],
+        id=registro[
+            "id"
+        ],
 
         entrevista_id=registro[
             "entrevista_id"
@@ -1007,6 +1509,113 @@ def _registro_para_resposta(
 
         data_resposta=registro[
             "data_resposta"
-        ]
+        ],
+
+        pergunta_texto_aplicado=(
+
+            registro[
+                "pergunta_texto_aplicado"
+            ]
+
+            if (
+                "pergunta_texto_aplicado"
+                in colunas
+            )
+
+            else None
+        ),
+
+        exemplo_esperado_aplicado=(
+
+            registro[
+                "exemplo_esperado_aplicado"
+            ]
+
+            if (
+                "exemplo_esperado_aplicado"
+                in colunas
+            )
+
+            else None
+        ),
+
+        competencia_id_aplicada=(
+
+            registro[
+                "competencia_id_aplicada"
+            ]
+
+            if (
+                "competencia_id_aplicada"
+                in colunas
+            )
+
+            else None
+        ),
+
+        competencia_nome_aplicada=(
+
+            registro[
+                "competencia_nome_aplicada"
+            ]
+
+            if (
+                "competencia_nome_aplicada"
+                in colunas
+            )
+
+            else None
+        ),
+
+        peso_pergunta_aplicado=(
+
+            registro[
+                "peso_pergunta_aplicado"
+            ]
+
+            if (
+                "peso_pergunta_aplicado"
+                in colunas
+            )
+
+            else None
+        ),
+
+        usa_star_aplicado=(
+
+            bool(
+                registro[
+                    "usa_star_aplicado"
+                ]
+            )
+
+            if (
+                "usa_star_aplicado"
+                in colunas
+
+                and
+
+                registro[
+                    "usa_star_aplicado"
+                ]
+                is not None
+            )
+
+            else None
+        ),
+
+        ordem_pergunta_aplicada=(
+
+            registro[
+                "ordem_pergunta_aplicada"
+            ]
+
+            if (
+                "ordem_pergunta_aplicada"
+                in colunas
+            )
+
+            else None
+        )
 
     )

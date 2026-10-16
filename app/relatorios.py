@@ -4,12 +4,16 @@ relatorios.py
 Serviço responsável pela geração dos relatórios
 do Simulador de Entrevistas.
 
-Versão: 0.7
+Versão: 0.8
 
 Responsabilidades:
 
-- buscar os dados da entrevista;
-- reunir perguntas e respostas;
+- buscar os dados históricos da entrevista;
+- apresentar tipo de entrevista;
+- apresentar área e subárea técnica;
+- reunir perguntas congeladas;
+- manter compatibilidade com entrevistas antigas;
+- reunir respostas;
 - reunir avaliações realizadas pela IA;
 - reunir notas por critério;
 - apresentar a pontuação final;
@@ -17,43 +21,49 @@ Responsabilidades:
 - apresentar desempenho consolidado por critério;
 - identificar melhor critério;
 - identificar critério a desenvolver;
-- organizar os dados utilizados pelo relatório.
+- preservar informações históricas;
+- organizar os dados utilizados pelo frontend.
 
 IMPORTANTE:
 
-Este módulo não possui rotas HTTP.
-
-A exposição dos dados através da API é
-responsabilidade de:
-
-app/routers/relatorios.py
-
-Este módulo também NÃO realiza nova análise
-por Inteligência Artificial.
+Este módulo não realiza nova análise por IA.
 
 Ele utiliza somente dados já armazenados
 no banco de dados.
 
-INTEGRIDADE HISTÓRICA:
+ENTREVISTAS NOVAS:
 
-Os dados da pergunta apresentados no relatório são
-obtidos do snapshot armazenado em respostas.
+As perguntas são obtidas prioritariamente de:
 
-O relatório não consulta a versão administrativa
-atual da pergunta para reconstruir entrevistas antigas.
+    entrevista_perguntas
+
+ENTREVISTAS ANTIGAS:
+
+Entrevistas criadas antes da implementação de
+entrevista_perguntas podem não possuir registros
+nessa tabela.
+
+Nesse caso, os snapshots existentes em respostas
+são utilizados como fallback histórico.
+
+Nenhuma inconsistência de avaliação é escondida.
+Caso o Motor de Pontuação identifique dados
+históricos inválidos, o erro será propagado.
 """
 
 import json
 
 
 from .entrevistas import (
-    buscar_entrevista
+    buscar_entrevista,
+    listar_perguntas_entrevista
 )
 
+
 from .respostas import (
-    listar_respostas_entrevista,
-    buscar_snapshot_resposta
+    listar_respostas_entrevista
 )
+
 
 from .avaliacao import (
     buscar_avaliacoes_entrevista,
@@ -65,7 +75,7 @@ from .avaliacao import (
 
 
 # ============================================================
-# FUNÇÃO AUXILIAR - OBTER VALOR
+# OBTER VALOR
 # ============================================================
 
 def _valor(
@@ -74,11 +84,8 @@ def _valor(
     padrao=None
 ):
     """
-    Obtém um valor independentemente de o objeto
-    ser um dicionário ou um objeto Python.
-
-    Isso facilita a integração entre os módulos
-    existentes do sistema.
+    Obtém um valor de um dicionário
+    ou objeto Python.
     """
 
     if objeto is None:
@@ -105,23 +112,15 @@ def _valor(
 
 
 # ============================================================
-# FUNÇÃO AUXILIAR - CONVERTER JSON PARA LISTA
+# CONVERTER JSON PARA LISTA
 # ============================================================
 
 def _converter_lista_json(
     valor
 ) -> list:
     """
-    Converte campos armazenados como JSON no SQLite
+    Converte campos JSON armazenados no SQLite
     para listas Python.
-
-    Utilizado principalmente para:
-
-    - pontos_fortes;
-    - pontos_melhoria.
-
-    Caso o valor já seja uma lista,
-    apenas a retorna.
     """
 
     if valor is None:
@@ -200,15 +199,19 @@ def buscar_dados_entrevista(
     entrevista_id: int
 ):
     """
-    Busca os dados básicos necessários
-    para gerar o relatório.
+    Busca os dados básicos da entrevista.
 
-    Esta função também é utilizada pelo router
-    para verificar a existência e a propriedade
-    da entrevista.
+    Também é utilizada pelo router
+    para verificar existência e propriedade.
     """
 
-    if entrevista_id <= 0:
+    if (
+        not isinstance(
+            entrevista_id,
+            int
+        )
+        or entrevista_id <= 0
+    ):
 
         raise ValueError(
             "ID da entrevista inválido."
@@ -231,6 +234,60 @@ def buscar_dados_entrevista(
 
 
 # ============================================================
+# CONTAR PERGUNTAS HISTÓRICAS
+# ============================================================
+
+def _contar_perguntas_historicas(
+    perguntas_congeladas,
+    respostas
+) -> int:
+    """
+    Determina a quantidade histórica de perguntas.
+
+    Prioridade:
+
+    1. entrevista_perguntas;
+    2. snapshots existentes nas respostas.
+
+    O fallback permite manter compatibilidade
+    com entrevistas criadas antes da existência
+    de entrevista_perguntas.
+    """
+
+    if perguntas_congeladas:
+
+        return len(
+            perguntas_congeladas
+        )
+
+
+    perguntas_ids = {
+
+        _valor(
+            resposta,
+            "pergunta_id"
+        )
+
+        for resposta
+        in respostas
+
+        if (
+            _valor(
+                resposta,
+                "pergunta_id"
+            )
+            is not None
+        )
+
+    }
+
+
+    return len(
+        perguntas_ids
+    )
+
+
+# ============================================================
 # GERAR RELATÓRIO
 # ============================================================
 
@@ -240,59 +297,102 @@ def gerar_relatorio(
     """
     Gera o relatório completo de uma entrevista.
 
-    O relatório consolida:
+    O relatório utiliza:
 
-    - dados da entrevista;
-    - perguntas;
-    - respostas;
-    - avaliações;
-    - notas por critério;
-    - pontuação final;
-    - classificação;
-    - desempenho por critério;
-    - destaques.
+    - snapshot do tipo;
+    - snapshot da área;
+    - snapshot da subárea;
+    - perguntas congeladas;
+    - snapshots das respostas;
+    - snapshots dos critérios.
 
-    Nenhuma nova avaliação de IA é realizada
-    nesta função.
-
-    O relatório utiliza somente resultados
-    já armazenados pelo sistema.
+    Para entrevistas antigas sem registros em
+    entrevista_perguntas, utiliza os snapshots
+    presentes nas respostas.
     """
 
-    # --------------------------------------------------------
-    # VALIDAR ID
-    # --------------------------------------------------------
-
-    if entrevista_id <= 0:
+    if (
+        not isinstance(
+            entrevista_id,
+            int
+        )
+        or entrevista_id <= 0
+    ):
 
         raise ValueError(
             "ID da entrevista inválido."
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # ENTREVISTA
-    # --------------------------------------------------------
+    # ========================================================
 
     entrevista = buscar_dados_entrevista(
         entrevista_id
     )
 
 
-    # --------------------------------------------------------
-    # RESPOSTAS
-    # --------------------------------------------------------
+    # ========================================================
+    # PERGUNTAS CONGELADAS
+    # ========================================================
 
-    respostas = (
-        listar_respostas_entrevista(
+    perguntas_congeladas = (
+        listar_perguntas_entrevista(
             entrevista_id
         )
     )
 
 
-    # --------------------------------------------------------
+    perguntas_por_id = {
+
+        _valor(
+            pergunta,
+            "pergunta_id"
+        ):
+            pergunta
+
+        for pergunta
+        in perguntas_congeladas
+
+        if (
+            _valor(
+                pergunta,
+                "pergunta_id"
+            )
+            is not None
+        )
+
+    }
+
+
+    # ========================================================
+    # RESPOSTAS
+    # ========================================================
+
+    respostas = listar_respostas_entrevista(
+        entrevista_id
+    )
+
+
+    # ========================================================
+    # QUANTIDADE HISTÓRICA DE PERGUNTAS
+    # ========================================================
+
+    quantidade_perguntas = (
+        _contar_perguntas_historicas(
+
+            perguntas_congeladas,
+
+            respostas
+
+        )
+    )
+
+
+    # ========================================================
     # AVALIAÇÕES
-    # --------------------------------------------------------
+    # ========================================================
 
     avaliacoes = (
         buscar_avaliacoes_entrevista(
@@ -301,42 +401,32 @@ def gerar_relatorio(
     )
 
 
-    # --------------------------------------------------------
-    # TODAS AS NOTAS DOS CRITÉRIOS
-    # --------------------------------------------------------
-    #
-    # IMPORTANTE:
-    #
-    # buscar_notas_criterios recebe o ID
-    # DA ENTREVISTA.
-    #
-    # Não recebe avaliacao_id.
-    #
-    # Buscamos uma única vez e depois filtramos
-    # por avaliação.
-    # --------------------------------------------------------
+    # ========================================================
+    # NOTAS DOS CRITÉRIOS
+    # ========================================================
 
-    todas_notas_criterios = (
-        buscar_notas_criterios(
-            entrevista_id
+    if avaliacoes:
+
+        todas_notas_criterios = (
+            buscar_notas_criterios(
+                entrevista_id
+            )
         )
-        if avaliacoes
-        else []
-    )
 
 
-    # --------------------------------------------------------
-    # DETALHES DAS RESPOSTAS
-    # --------------------------------------------------------
+    else:
+
+        todas_notas_criterios = []
+
+
+    # ========================================================
+    # MONTAR RESPOSTAS
+    # ========================================================
 
     respostas_relatorio = []
 
 
     for resposta in respostas:
-
-        # ----------------------------------------------------
-        # ID DA RESPOSTA
-        # ----------------------------------------------------
 
         resposta_id = _valor(
             resposta,
@@ -344,35 +434,22 @@ def gerar_relatorio(
         )
 
 
-        # ----------------------------------------------------
-        # ID DA PERGUNTA
-        # ----------------------------------------------------
-
         pergunta_id = _valor(
             resposta,
             "pergunta_id"
         )
 
 
-        # ----------------------------------------------------
-        # SNAPSHOT HISTÓRICO DA PERGUNTA
-        # ----------------------------------------------------
-
-        snapshot_pergunta = buscar_snapshot_resposta(
-            resposta_id
+        pergunta_congelada = (
+            perguntas_por_id.get(
+                pergunta_id
+            )
         )
 
-        if snapshot_pergunta is None:
 
-            raise ValueError(
-                "Resposta não encontrada ao gerar "
-                "o relatório."
-            )
-
-
-        # ----------------------------------------------------
-        # LOCALIZAR AVALIAÇÃO DA RESPOSTA
-        # ----------------------------------------------------
+        # ====================================================
+        # LOCALIZAR AVALIAÇÃO
+        # ====================================================
 
         avaliacao_resposta = None
 
@@ -394,67 +471,207 @@ def gerar_relatorio(
                 break
 
 
-        # ----------------------------------------------------
-        # NOTAS DOS CRITÉRIOS
-        # ----------------------------------------------------
+        # ====================================================
+        # CRITÉRIOS DA AVALIAÇÃO
+        # ====================================================
 
         notas_criterios = []
 
 
-        if avaliacao_resposta is not None:
+        if (
+            avaliacao_resposta
+            is not None
+        ):
 
             avaliacao_id = _valor(
+
                 avaliacao_resposta,
-                "id"
+
+                "avaliacao_id",
+
+                _valor(
+                    avaliacao_resposta,
+                    "id"
+                )
+
             )
 
 
-            if avaliacao_id is None:
+            notas_criterios = [
 
-                avaliacao_id = _valor(
-                    avaliacao_resposta,
-                    "avaliacao_id"
+                nota
+
+                for nota
+                in todas_notas_criterios
+
+                if (
+                    _valor(
+                        nota,
+                        "avaliacao_id"
+                    )
+                    == avaliacao_id
                 )
 
-
-            if avaliacao_id is not None:
-
-                notas_criterios = [
-
-                    nota
-
-                    for nota
-                    in todas_notas_criterios
-
-                    if (
-                        _valor(
-                            nota,
-                            "avaliacao_id"
-                        )
-                        == avaliacao_id
-                    )
-                ]
+            ]
 
 
-        # ----------------------------------------------------
-        # DADOS DA AVALIAÇÃO
-        # ----------------------------------------------------
+        # ====================================================
+        # DADOS HISTÓRICOS DA RESPOSTA
+        # ====================================================
 
-        avaliacao_relatorio = None
+        pergunta_texto = _valor(
+            resposta,
+            "pergunta_texto_aplicado"
+        )
 
 
-        if avaliacao_resposta is not None:
+        exemplo_esperado = _valor(
+            resposta,
+            "exemplo_esperado_aplicado"
+        )
 
-            avaliacao_relatorio = {
+
+        competencia_id = _valor(
+            resposta,
+            "competencia_id_aplicada"
+        )
+
+
+        competencia_nome = _valor(
+            resposta,
+            "competencia_nome_aplicada"
+        )
+
+
+        peso_pergunta = _valor(
+            resposta,
+            "peso_pergunta_aplicado"
+        )
+
+
+        usa_star = _valor(
+            resposta,
+            "usa_star_aplicado"
+        )
+
+
+        ordem_pergunta = _valor(
+            resposta,
+            "ordem_pergunta_aplicada"
+        )
+
+
+        # ====================================================
+        # VALIDAR SNAPSHOT DA RESPOSTA
+        # ====================================================
+
+        if pergunta_texto is None:
+
+            raise ValueError(
+                "Existe resposta sem snapshot histórico "
+                "do texto da pergunta."
+            )
+
+
+        if competencia_id is None:
+
+            raise ValueError(
+                "Existe resposta sem snapshot histórico "
+                "da competência."
+            )
+
+
+        if competencia_nome is None:
+
+            raise ValueError(
+                "Existe resposta sem nome histórico "
+                "da competência."
+            )
+
+
+        if peso_pergunta is None:
+
+            raise ValueError(
+                "Existe resposta sem peso histórico "
+                "da pergunta."
+            )
+
+
+        # ====================================================
+        # ÁREA/SUBÁREA DA PERGUNTA CONGELADA
+        # ====================================================
+
+        if pergunta_congelada is not None:
+
+            area_pergunta_id = _valor(
+                pergunta_congelada,
+                "area_tecnica_id_aplicada"
+            )
+
+
+            area_pergunta = _valor(
+                pergunta_congelada,
+                "area_tecnica_nome_aplicada"
+            )
+
+
+            subarea_pergunta_id = _valor(
+                pergunta_congelada,
+                "subarea_tecnica_id_aplicada"
+            )
+
+
+            subarea_pergunta = _valor(
+                pergunta_congelada,
+                "subarea_tecnica_nome_aplicada"
+            )
+
+
+        else:
+
+            # ------------------------------------------------
+            # ENTREVISTA LEGADA
+            # ------------------------------------------------
+            #
+            # Não inventamos a subárea individual da
+            # pergunta quando esse snapshot não existia.
+            # ------------------------------------------------
+
+            area_pergunta_id = None
+
+            area_pergunta = None
+
+            subarea_pergunta_id = None
+
+            subarea_pergunta = None
+
+
+        # ====================================================
+        # AVALIAÇÃO FORMATADA
+        # ====================================================
+
+        avaliacao_formatada = None
+
+
+        if (
+            avaliacao_resposta
+            is not None
+        ):
+
+            avaliacao_formatada = {
 
                 "id":
                     _valor(
+
                         avaliacao_resposta,
-                        "id",
+
+                        "avaliacao_id",
+
                         _valor(
                             avaliacao_resposta,
-                            "avaliacao_id"
+                            "id"
                         )
+
                     ),
 
                 "pontuacao":
@@ -499,14 +716,16 @@ def gerar_relatorio(
 
                 "criterios":
                     notas_criterios
+
             }
 
 
-        # ----------------------------------------------------
-        # MONTAR RESPOSTA
-        # ----------------------------------------------------
+        # ====================================================
+        # ADICIONAR AO RELATÓRIO
+        # ====================================================
 
         respostas_relatorio.append(
+
             {
 
                 "resposta_id":
@@ -516,32 +735,37 @@ def gerar_relatorio(
                     pergunta_id,
 
                 "pergunta":
-                    _valor(
-                        snapshot_pergunta,
-                        "pergunta"
-                    ),
+                    pergunta_texto,
+
+                "exemplo_esperado":
+                    exemplo_esperado,
 
                 "competencia_id":
-                    _valor(
-                        snapshot_pergunta,
-                        "competencia_id"
-                    ),
+                    competencia_id,
+
+                "competencia":
+                    competencia_nome,
 
                 "usa_star":
-                    bool(
-                        _valor(
-                            snapshot_pergunta,
-                            "usa_star",
-                            False
-                        )
-                    ),
+                    usa_star,
 
                 "peso_pergunta":
-                    _valor(
-                        snapshot_pergunta,
-                        "peso_pergunta",
-                        1.0
-                    ),
+                    peso_pergunta,
+
+                "ordem_pergunta":
+                    ordem_pergunta,
+
+                "area_tecnica_id":
+                    area_pergunta_id,
+
+                "area_tecnica":
+                    area_pergunta,
+
+                "subarea_tecnica_id":
+                    subarea_pergunta_id,
+
+                "subarea_tecnica":
+                    subarea_pergunta,
 
                 "texto_resposta":
                     _valor(
@@ -562,25 +786,22 @@ def gerar_relatorio(
                     ),
 
                 "avaliacao":
-                    avaliacao_relatorio
+                    avaliacao_formatada
 
             }
+
         )
 
 
-    # --------------------------------------------------------
-    # PONTUAÇÃO FINAL
-    # --------------------------------------------------------
+    # ========================================================
+    # RESULTADOS CONSOLIDADOS
+    # ========================================================
 
     pontuacao_final = _valor(
         entrevista,
         "pontuacao_final"
     )
 
-
-    # --------------------------------------------------------
-    # VALORES CONSOLIDADOS PADRÃO
-    # --------------------------------------------------------
 
     classificacao = None
 
@@ -593,18 +814,15 @@ def gerar_relatorio(
 
         "criterio_a_desenvolver":
             None
+
     }
 
 
-    # --------------------------------------------------------
-    # RESULTADOS CONSOLIDADOS
-    # --------------------------------------------------------
+    # ========================================================
+    # NÃO ESCONDER INCONSISTÊNCIAS
+    # ========================================================
 
     if avaliacoes:
-
-        # ----------------------------------------------------
-        # DESEMPENHO DOS CRITÉRIOS
-        # ----------------------------------------------------
 
         desempenho_criterios = (
             calcular_desempenho_criterios(
@@ -613,11 +831,10 @@ def gerar_relatorio(
         )
 
 
-        # ----------------------------------------------------
-        # CLASSIFICAÇÃO
-        # ----------------------------------------------------
-
-        if pontuacao_final is not None:
+        if (
+            pontuacao_final
+            is not None
+        ):
 
             classificacao = (
                 classificar_desempenho(
@@ -626,24 +843,16 @@ def gerar_relatorio(
             )
 
 
-        # ----------------------------------------------------
-        # DESTAQUES
-        # ----------------------------------------------------
-        #
-        # identificar_destaques recebe
-        # DESEMPENHO_CRITERIOS.
-        #
-        # Não recebe entrevista_id.
-        # ----------------------------------------------------
-
-        destaques = identificar_destaques(
-            desempenho_criterios
+        destaques = (
+            identificar_destaques(
+                desempenho_criterios
+            )
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # RETORNO
-    # --------------------------------------------------------
+    # ========================================================
 
     return {
 
@@ -665,6 +874,42 @@ def gerar_relatorio(
                 _valor(
                     entrevista,
                     "tipo_entrevista_id"
+                ),
+
+            "tipo_entrevista":
+                _valor(
+                    entrevista,
+                    "tipo_entrevista_nome_aplicado"
+                ),
+
+            "tipo_entrevista_descricao":
+                _valor(
+                    entrevista,
+                    "tipo_entrevista_descricao_aplicada"
+                ),
+
+            "area_tecnica_id":
+                _valor(
+                    entrevista,
+                    "area_tecnica_id"
+                ),
+
+            "area_tecnica":
+                _valor(
+                    entrevista,
+                    "area_tecnica_nome_aplicado"
+                ),
+
+            "subarea_tecnica_id":
+                _valor(
+                    entrevista,
+                    "subarea_tecnica_id"
+                ),
+
+            "subarea_tecnica":
+                _valor(
+                    entrevista,
+                    "subarea_tecnica_nome_aplicado"
                 ),
 
             "data_inicio":
@@ -696,30 +941,27 @@ def gerar_relatorio(
 
         },
 
+        "quantidade_perguntas":
+            quantidade_perguntas,
 
         "quantidade_respostas":
             len(
                 respostas
             ),
 
-
         "quantidade_avaliacoes":
             len(
                 avaliacoes
             ),
 
-
         "classificacao":
             classificacao,
-
 
         "desempenho_criterios":
             desempenho_criterios,
 
-
         "destaques":
             destaques,
-
 
         "respostas":
             respostas_relatorio

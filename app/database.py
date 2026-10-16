@@ -2,46 +2,33 @@
 database.py
 
 Responsável pela conexão com o banco de dados SQLite
-e pela criação das tabelas do Simulador de Entrevistas.
+e pela criação/evolução das tabelas do Simulador de Entrevistas.
 
-Versão: 0.5
+Versão: 0.6
 
-Nesta versão são preservados historicamente:
+Principais recursos preservados nesta versão:
 
-1. Peso utilizado nos critérios de avaliação.
+- usuários e perfis;
+- tipos de entrevista;
+- competências;
+- critérios dinâmicos de avaliação;
+- perguntas;
+- entrevistas;
+- respostas;
+- avaliações;
+- histórico de acesso;
+- snapshots históricos de perguntas, tipos e critérios.
 
-2. Dados da pergunta utilizada em cada resposta.
+Novos recursos desta versão:
 
-3. Nome e descrição do tipo de entrevista utilizado.
-
-4. Nome, descrição, ordem e peso dos critérios
-   utilizados em cada avaliação.
-
-SNAPSHOT DE CRITÉRIO:
-
-    avaliacao_criterios.criterio_nome_aplicado
-    avaliacao_criterios.criterio_descricao_aplicada
-    avaliacao_criterios.criterio_ordem_aplicada
-    avaliacao_criterios.peso_aplicado
-
-SNAPSHOT DE PERGUNTA:
-
-    respostas.pergunta_texto_aplicado
-    respostas.exemplo_esperado_aplicado
-    respostas.competencia_id_aplicada
-    respostas.competencia_nome_aplicada
-    respostas.peso_pergunta_aplicado
-    respostas.usa_star_aplicado
-    respostas.ordem_pergunta_aplicada
-
-SNAPSHOT DO TIPO DE ENTREVISTA:
-
-    entrevistas.tipo_entrevista_nome_aplicado
-    entrevistas.tipo_entrevista_descricao_aplicada
-
-A finalidade dos snapshots é impedir que alterações
-administrativas futuras modifiquem entrevistas,
-avaliações ou relatórios históricos.
+- áreas técnicas;
+- subáreas técnicas;
+- configuração do tipo de entrevista que utiliza área técnica;
+- associação opcional de perguntas a área/subárea;
+- associação opcional de entrevistas a área/subárea;
+- snapshots históricos de área/subárea;
+- tabela entrevista_perguntas para congelar o conjunto de perguntas
+  aplicado no início de uma entrevista.
 """
 
 import os
@@ -49,7 +36,7 @@ import sqlite3
 
 
 # ============================================================
-# CONFIGURAÇÃO DO BANCO
+# CONFIGURAÇÃO DO BANCO DE DADOS
 # ============================================================
 
 PASTA_BANCO = "data"
@@ -63,18 +50,81 @@ CAMINHO_BANCO = os.path.join(
 
 
 # ============================================================
-# CONEXÃO
+# ÁREAS TÉCNICAS INICIAIS
+# ============================================================
+
+AREAS_TECNICAS_INICIAIS = (
+
+    (
+        "Direito",
+
+        "Área destinada a entrevistas técnicas relacionadas "
+        "ao campo jurídico.",
+
+        1
+    ),
+
+    (
+        "Psicologia",
+
+        "Área destinada a entrevistas técnicas relacionadas "
+        "à Psicologia.",
+
+        2
+    ),
+
+    (
+        "Administração",
+
+        "Área destinada a entrevistas técnicas relacionadas "
+        "à Administração.",
+
+        3
+    ),
+
+    (
+        "Economia",
+
+        "Área destinada a entrevistas técnicas relacionadas "
+        "à Economia.",
+
+        4
+    ),
+
+    (
+        "Ciências Contábeis",
+
+        "Área destinada a entrevistas técnicas relacionadas "
+        "às Ciências Contábeis.",
+
+        5
+    ),
+
+    (
+        "Tecnologia",
+
+        "Área destinada a entrevistas técnicas relacionadas "
+        "à Tecnologia e áreas correlatas.",
+
+        6
+    )
+
+)
+
+
+# ============================================================
+# CONEXÃO COM O BANCO
 # ============================================================
 
 def conectar_banco():
     """
-    Cria e retorna uma conexão com o SQLite.
+    Cria e retorna uma conexão com o banco SQLite.
 
-    Também:
+    A função também:
 
-    - cria a pasta do banco;
-    - permite acessar colunas pelo nome;
-    - ativa chaves estrangeiras.
+    - cria a pasta do banco caso ela não exista;
+    - permite acessar as colunas pelo nome;
+    - ativa o suporte às chaves estrangeiras.
     """
 
     os.makedirs(
@@ -96,35 +146,32 @@ def conectar_banco():
 
 
 # ============================================================
-# VERIFICAR COLUNA
+# FUNÇÕES AUXILIARES DE EVOLUÇÃO DO BANCO
 # ============================================================
 
-def _coluna_existe(
+def _colunas_tabela(
     cursor: sqlite3.Cursor,
-    tabela: str,
-    coluna: str
-) -> bool:
+    tabela: str
+) -> set[str]:
     """
-    Verifica se uma coluna existe em determinada tabela.
+    Retorna os nomes das colunas existentes em uma tabela.
     """
 
     cursor.execute(
         f"PRAGMA table_info({tabela})"
     )
 
-    colunas = cursor.fetchall()
+    return {
 
-    return any(
-        registro["name"] == coluna
-        for registro in colunas
-    )
+        registro["name"]
+
+        for registro
+        in cursor.fetchall()
+
+    }
 
 
-# ============================================================
-# ADICIONAR COLUNA
-# ============================================================
-
-def _adicionar_coluna(
+def _adicionar_coluna_se_ausente(
     cursor: sqlite3.Cursor,
     tabela: str,
     coluna: str,
@@ -132,12 +179,14 @@ def _adicionar_coluna(
 ) -> None:
     """
     Adiciona uma coluna somente quando ela ainda não existe.
+
+    Essa função permite atualizar bancos já existentes sem
+    apagar os dados armazenados.
     """
 
-    if _coluna_existe(
+    if coluna in _colunas_tabela(
         cursor,
-        tabela,
-        coluna
+        tabela
     ):
 
         return
@@ -152,1050 +201,17 @@ def _adicionar_coluna(
 
 
 # ============================================================
-# MIGRAÇÃO DO PESO HISTÓRICO DO CRITÉRIO
-# ============================================================
-
-def _migrar_peso_aplicado(
-    cursor: sqlite3.Cursor
-) -> None:
-    """
-    Garante a existência do peso histórico
-    utilizado em cada avaliação por critério.
-    """
-
-    _adicionar_coluna(
-        cursor,
-        "avaliacao_criterios",
-        "peso_aplicado",
-        """
-        REAL
-        CHECK (
-            peso_aplicado IS NULL
-            OR peso_aplicado >= 0
-        )
-        """
-    )
-
-    cursor.execute(
-        """
-        UPDATE avaliacao_criterios
-
-        SET peso_aplicado = (
-            SELECT ca.peso
-
-            FROM criterios_avaliacao ca
-
-            WHERE ca.id =
-                avaliacao_criterios.criterio_id
-        )
-
-        WHERE peso_aplicado IS NULL
-        """
-    )
-
-    cursor.execute(
-        """
-        SELECT COUNT(*) AS quantidade
-
-        FROM avaliacao_criterios
-
-        WHERE peso_aplicado IS NULL
-        """
-    )
-
-    quantidade = int(
-        cursor.fetchone()["quantidade"]
-    )
-
-    if quantidade > 0:
-
-        raise sqlite3.IntegrityError(
-            "Existem avaliações por critério "
-            "sem peso histórico."
-        )
-
-
-# ============================================================
-# MIGRAÇÃO DOS METADADOS DOS CRITÉRIOS
-# ============================================================
-
-def _migrar_snapshot_criterios(
-    cursor: sqlite3.Cursor
-) -> None:
-    """
-    Adiciona e preenche os metadados históricos
-    de cada critério utilizado em uma avaliação.
-
-    Para avaliações anteriores à versão 0.5,
-    utiliza os valores administrativos atuais como
-    melhor informação histórica disponível.
-    """
-
-    _adicionar_coluna(
-        cursor,
-        "avaliacao_criterios",
-        "criterio_nome_aplicado",
-        "TEXT"
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "avaliacao_criterios",
-        "criterio_descricao_aplicada",
-        "TEXT"
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "avaliacao_criterios",
-        "criterio_ordem_aplicada",
-        "INTEGER"
-    )
-
-    cursor.execute(
-        """
-        UPDATE avaliacao_criterios
-
-        SET
-
-            criterio_nome_aplicado = (
-                SELECT ca.nome
-
-                FROM criterios_avaliacao ca
-
-                WHERE ca.id =
-                    avaliacao_criterios.criterio_id
-            ),
-
-            criterio_descricao_aplicada = (
-                SELECT ca.descricao
-
-                FROM criterios_avaliacao ca
-
-                WHERE ca.id =
-                    avaliacao_criterios.criterio_id
-            ),
-
-            criterio_ordem_aplicada = (
-                SELECT ca.ordem
-
-                FROM criterios_avaliacao ca
-
-                WHERE ca.id =
-                    avaliacao_criterios.criterio_id
-            )
-
-        WHERE criterio_nome_aplicado IS NULL
-        """
-    )
-
-    cursor.execute(
-        """
-        SELECT COUNT(*) AS quantidade
-
-        FROM avaliacao_criterios
-
-        WHERE criterio_nome_aplicado IS NULL
-        """
-    )
-
-    quantidade = int(
-        cursor.fetchone()["quantidade"]
-    )
-
-    if quantidade > 0:
-
-        raise sqlite3.IntegrityError(
-            "Existem avaliações sem snapshot "
-            "histórico do critério."
-        )
-
-
-# ============================================================
-# TRIGGERS DO SNAPSHOT DOS CRITÉRIOS
-# ============================================================
-
-def _criar_triggers_snapshot_criterios(
-    cursor: sqlite3.Cursor
-) -> None:
-    """
-    Cria triggers responsáveis por:
-
-    - capturar peso e metadados do critério;
-    - impedir alterações posteriores.
-    """
-
-    # --------------------------------------------------------
-    # PESO
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_avaliacao_criterios_peso_insert
-
-        AFTER INSERT ON avaliacao_criterios
-
-        FOR EACH ROW
-
-        WHEN NEW.peso_aplicado IS NULL
-
-        BEGIN
-
-            UPDATE avaliacao_criterios
-
-            SET peso_aplicado = (
-                SELECT peso
-
-                FROM criterios_avaliacao
-
-                WHERE id = NEW.criterio_id
-            )
-
-            WHERE id = NEW.id;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT peso_aplicado
-
-                    FROM avaliacao_criterios
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar o peso histórico do critério.'
-                )
-
-            END;
-
-        END;
-        """
-    )
-
-    # --------------------------------------------------------
-    # METADADOS
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_avaliacao_criterios_snapshot_insert
-
-        AFTER INSERT ON avaliacao_criterios
-
-        FOR EACH ROW
-
-        WHEN NEW.criterio_nome_aplicado IS NULL
-
-        BEGIN
-
-            UPDATE avaliacao_criterios
-
-            SET
-
-                criterio_nome_aplicado = (
-                    SELECT nome
-
-                    FROM criterios_avaliacao
-
-                    WHERE id = NEW.criterio_id
-                ),
-
-                criterio_descricao_aplicada = (
-                    SELECT descricao
-
-                    FROM criterios_avaliacao
-
-                    WHERE id = NEW.criterio_id
-                ),
-
-                criterio_ordem_aplicada = (
-                    SELECT ordem
-
-                    FROM criterios_avaliacao
-
-                    WHERE id = NEW.criterio_id
-                )
-
-            WHERE id = NEW.id;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT criterio_nome_aplicado
-
-                    FROM avaliacao_criterios
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar o snapshot histórico do critério.'
-                )
-
-            END;
-
-        END;
-        """
-    )
-
-    # --------------------------------------------------------
-    # PESO IMUTÁVEL
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_avaliacao_criterios_peso_imutavel
-
-        BEFORE UPDATE OF peso_aplicado
-        ON avaliacao_criterios
-
-        FOR EACH ROW
-
-        WHEN
-            OLD.peso_aplicado IS NOT NULL
-
-            AND NEW.peso_aplicado
-                IS NOT OLD.peso_aplicado
-
-        BEGIN
-
-            SELECT RAISE(
-                ABORT,
-                'O peso histórico da avaliação não pode ser alterado.'
-            );
-
-        END;
-        """
-    )
-
-    # --------------------------------------------------------
-    # METADADOS IMUTÁVEIS
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_avaliacao_criterios_snapshot_imutavel
-
-        BEFORE UPDATE OF
-
-            criterio_nome_aplicado,
-            criterio_descricao_aplicada,
-            criterio_ordem_aplicada
-
-        ON avaliacao_criterios
-
-        FOR EACH ROW
-
-        WHEN
-
-            OLD.criterio_nome_aplicado IS NOT NULL
-
-            AND (
-
-                NEW.criterio_nome_aplicado
-                    IS NOT OLD.criterio_nome_aplicado
-
-                OR NEW.criterio_descricao_aplicada
-                    IS NOT OLD.criterio_descricao_aplicada
-
-                OR NEW.criterio_ordem_aplicada
-                    IS NOT OLD.criterio_ordem_aplicada
-
-            )
-
-        BEGIN
-
-            SELECT RAISE(
-                ABORT,
-                'O snapshot histórico do critério não pode ser alterado.'
-            );
-
-        END;
-        """
-    )
-
-
-# ============================================================
-# MIGRAÇÃO DO SNAPSHOT DAS PERGUNTAS
-# ============================================================
-
-def _migrar_snapshot_perguntas(
-    cursor: sqlite3.Cursor
-) -> None:
-    """
-    Adiciona e preenche o snapshot histórico
-    das perguntas utilizadas nas respostas.
-    """
-
-    _adicionar_coluna(
-        cursor,
-        "respostas",
-        "pergunta_texto_aplicado",
-        "TEXT"
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "respostas",
-        "exemplo_esperado_aplicado",
-        "TEXT"
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "respostas",
-        "competencia_id_aplicada",
-        "INTEGER"
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "respostas",
-        "competencia_nome_aplicada",
-        "TEXT"
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "respostas",
-        "peso_pergunta_aplicado",
-        """
-        REAL
-        CHECK (
-            peso_pergunta_aplicado IS NULL
-            OR peso_pergunta_aplicado >= 0
-        )
-        """
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "respostas",
-        "usa_star_aplicado",
-        """
-        INTEGER
-        CHECK (
-            usa_star_aplicado IS NULL
-            OR usa_star_aplicado IN (0, 1)
-        )
-        """
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "respostas",
-        "ordem_pergunta_aplicada",
-        "INTEGER"
-    )
-
-    cursor.execute(
-        """
-        UPDATE respostas
-
-        SET
-
-            pergunta_texto_aplicado = (
-                SELECT p.texto
-
-                FROM perguntas p
-
-                WHERE p.id =
-                    respostas.pergunta_id
-            ),
-
-            exemplo_esperado_aplicado = (
-                SELECT p.exemplo_esperado
-
-                FROM perguntas p
-
-                WHERE p.id =
-                    respostas.pergunta_id
-            ),
-
-            competencia_id_aplicada = (
-                SELECT p.competencia_id
-
-                FROM perguntas p
-
-                WHERE p.id =
-                    respostas.pergunta_id
-            ),
-
-            competencia_nome_aplicada = (
-                SELECT c.nome
-
-                FROM perguntas p
-
-                INNER JOIN competencias c
-                    ON c.id = p.competencia_id
-
-                WHERE p.id =
-                    respostas.pergunta_id
-            ),
-
-            peso_pergunta_aplicado = (
-                SELECT p.peso
-
-                FROM perguntas p
-
-                WHERE p.id =
-                    respostas.pergunta_id
-            ),
-
-            usa_star_aplicado = (
-                SELECT p.usa_star
-
-                FROM perguntas p
-
-                WHERE p.id =
-                    respostas.pergunta_id
-            ),
-
-            ordem_pergunta_aplicada = (
-                SELECT p.ordem
-
-                FROM perguntas p
-
-                WHERE p.id =
-                    respostas.pergunta_id
-            )
-
-        WHERE peso_pergunta_aplicado IS NULL
-        """
-    )
-
-    cursor.execute(
-        """
-        SELECT COUNT(*) AS quantidade
-
-        FROM respostas
-
-        WHERE pergunta_texto_aplicado IS NULL
-
-           OR competencia_id_aplicada IS NULL
-
-           OR competencia_nome_aplicada IS NULL
-
-           OR peso_pergunta_aplicado IS NULL
-
-           OR usa_star_aplicado IS NULL
-        """
-    )
-
-    quantidade = int(
-        cursor.fetchone()["quantidade"]
-    )
-
-    if quantidade > 0:
-
-        raise sqlite3.IntegrityError(
-            "Existem respostas sem snapshot "
-            "histórico completo da pergunta."
-        )
-
-
-# ============================================================
-# TRIGGERS DO SNAPSHOT DAS PERGUNTAS
-# ============================================================
-
-def _criar_triggers_snapshot_pergunta(
-    cursor: sqlite3.Cursor
-) -> None:
-    """
-    Cria triggers responsáveis por preservar
-    historicamente as perguntas utilizadas.
-    """
-
-    # --------------------------------------------------------
-    # IMPEDIR SNAPSHOT MANUAL
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_respostas_snapshot_insert_protegido
-
-        BEFORE INSERT ON respostas
-
-        FOR EACH ROW
-
-        WHEN
-            NEW.pergunta_texto_aplicado IS NOT NULL
-
-            OR NEW.exemplo_esperado_aplicado IS NOT NULL
-
-            OR NEW.competencia_id_aplicada IS NOT NULL
-
-            OR NEW.competencia_nome_aplicada IS NOT NULL
-
-            OR NEW.peso_pergunta_aplicado IS NOT NULL
-
-            OR NEW.usa_star_aplicado IS NOT NULL
-
-            OR NEW.ordem_pergunta_aplicada IS NOT NULL
-
-        BEGIN
-
-            SELECT RAISE(
-                ABORT,
-                'O snapshot histórico da pergunta é preenchido automaticamente.'
-            );
-
-        END;
-        """
-    )
-
-    # --------------------------------------------------------
-    # CAPTURAR SNAPSHOT
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_respostas_snapshot_insert
-
-        AFTER INSERT ON respostas
-
-        FOR EACH ROW
-
-        WHEN NEW.peso_pergunta_aplicado IS NULL
-
-        BEGIN
-
-            UPDATE respostas
-
-            SET
-
-                pergunta_texto_aplicado = (
-                    SELECT p.texto
-
-                    FROM perguntas p
-
-                    WHERE p.id = NEW.pergunta_id
-                ),
-
-                exemplo_esperado_aplicado = (
-                    SELECT p.exemplo_esperado
-
-                    FROM perguntas p
-
-                    WHERE p.id = NEW.pergunta_id
-                ),
-
-                competencia_id_aplicada = (
-                    SELECT p.competencia_id
-
-                    FROM perguntas p
-
-                    WHERE p.id = NEW.pergunta_id
-                ),
-
-                competencia_nome_aplicada = (
-                    SELECT c.nome
-
-                    FROM perguntas p
-
-                    INNER JOIN competencias c
-                        ON c.id = p.competencia_id
-
-                    WHERE p.id = NEW.pergunta_id
-                ),
-
-                peso_pergunta_aplicado = (
-                    SELECT p.peso
-
-                    FROM perguntas p
-
-                    WHERE p.id = NEW.pergunta_id
-                ),
-
-                usa_star_aplicado = (
-                    SELECT p.usa_star
-
-                    FROM perguntas p
-
-                    WHERE p.id = NEW.pergunta_id
-                ),
-
-                ordem_pergunta_aplicada = (
-                    SELECT p.ordem
-
-                    FROM perguntas p
-
-                    WHERE p.id = NEW.pergunta_id
-                )
-
-            WHERE id = NEW.id;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT pergunta_texto_aplicado
-
-                    FROM respostas
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar o texto histórico da pergunta.'
-                )
-
-            END;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT competencia_id_aplicada
-
-                    FROM respostas
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar a competência histórica da pergunta.'
-                )
-
-            END;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT competencia_nome_aplicada
-
-                    FROM respostas
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar o nome histórico da competência.'
-                )
-
-            END;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT peso_pergunta_aplicado
-
-                    FROM respostas
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar o peso histórico da pergunta.'
-                )
-
-            END;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT usa_star_aplicado
-
-                    FROM respostas
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar o STAR histórico da pergunta.'
-                )
-
-            END;
-
-        END;
-        """
-    )
-
-    # --------------------------------------------------------
-    # IMUTABILIDADE
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_respostas_snapshot_imutavel
-
-        BEFORE UPDATE OF
-
-            pergunta_texto_aplicado,
-            exemplo_esperado_aplicado,
-            competencia_id_aplicada,
-            competencia_nome_aplicada,
-            peso_pergunta_aplicado,
-            usa_star_aplicado,
-            ordem_pergunta_aplicada
-
-        ON respostas
-
-        FOR EACH ROW
-
-        WHEN
-
-            OLD.peso_pergunta_aplicado IS NOT NULL
-
-            AND (
-
-                NEW.pergunta_texto_aplicado
-                    IS NOT OLD.pergunta_texto_aplicado
-
-                OR NEW.exemplo_esperado_aplicado
-                    IS NOT OLD.exemplo_esperado_aplicado
-
-                OR NEW.competencia_id_aplicada
-                    IS NOT OLD.competencia_id_aplicada
-
-                OR NEW.competencia_nome_aplicada
-                    IS NOT OLD.competencia_nome_aplicada
-
-                OR NEW.peso_pergunta_aplicado
-                    IS NOT OLD.peso_pergunta_aplicado
-
-                OR NEW.usa_star_aplicado
-                    IS NOT OLD.usa_star_aplicado
-
-                OR NEW.ordem_pergunta_aplicada
-                    IS NOT OLD.ordem_pergunta_aplicada
-
-            )
-
-        BEGIN
-
-            SELECT RAISE(
-                ABORT,
-                'O snapshot histórico da pergunta não pode ser alterado.'
-            );
-
-        END;
-        """
-    )
-
-
-# ============================================================
-# MIGRAÇÃO DO TIPO DE ENTREVISTA
-# ============================================================
-
-def _migrar_snapshot_tipo_entrevista(
-    cursor: sqlite3.Cursor
-) -> None:
-    """
-    Adiciona e preenche o snapshot histórico
-    do tipo de entrevista utilizado.
-    """
-
-    _adicionar_coluna(
-        cursor,
-        "entrevistas",
-        "tipo_entrevista_nome_aplicado",
-        "TEXT"
-    )
-
-    _adicionar_coluna(
-        cursor,
-        "entrevistas",
-        "tipo_entrevista_descricao_aplicada",
-        "TEXT"
-    )
-
-    cursor.execute(
-        """
-        UPDATE entrevistas
-
-        SET
-
-            tipo_entrevista_nome_aplicado = (
-                SELECT te.nome
-
-                FROM tipos_entrevista te
-
-                WHERE te.id =
-                    entrevistas.tipo_entrevista_id
-            ),
-
-            tipo_entrevista_descricao_aplicada = (
-                SELECT te.descricao
-
-                FROM tipos_entrevista te
-
-                WHERE te.id =
-                    entrevistas.tipo_entrevista_id
-            )
-
-        WHERE tipo_entrevista_nome_aplicado IS NULL
-        """
-    )
-
-    cursor.execute(
-        """
-        SELECT COUNT(*) AS quantidade
-
-        FROM entrevistas
-
-        WHERE tipo_entrevista_nome_aplicado IS NULL
-        """
-    )
-
-    quantidade = int(
-        cursor.fetchone()["quantidade"]
-    )
-
-    if quantidade > 0:
-
-        raise sqlite3.IntegrityError(
-            "Existem entrevistas sem snapshot "
-            "histórico do tipo de entrevista."
-        )
-
-
-# ============================================================
-# TRIGGERS DO TIPO DE ENTREVISTA
-# ============================================================
-
-def _criar_triggers_snapshot_tipo_entrevista(
-    cursor: sqlite3.Cursor
-) -> None:
-    """
-    Captura e protege o nome e a descrição
-    do tipo de entrevista.
-    """
-
-    # --------------------------------------------------------
-    # CAPTURAR SNAPSHOT
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_entrevistas_tipo_snapshot_insert
-
-        AFTER INSERT ON entrevistas
-
-        FOR EACH ROW
-
-        WHEN NEW.tipo_entrevista_nome_aplicado IS NULL
-
-        BEGIN
-
-            UPDATE entrevistas
-
-            SET
-
-                tipo_entrevista_nome_aplicado = (
-                    SELECT nome
-
-                    FROM tipos_entrevista
-
-                    WHERE id =
-                        NEW.tipo_entrevista_id
-                ),
-
-                tipo_entrevista_descricao_aplicada = (
-                    SELECT descricao
-
-                    FROM tipos_entrevista
-
-                    WHERE id =
-                        NEW.tipo_entrevista_id
-                )
-
-            WHERE id = NEW.id;
-
-
-            SELECT CASE
-
-                WHEN (
-                    SELECT tipo_entrevista_nome_aplicado
-
-                    FROM entrevistas
-
-                    WHERE id = NEW.id
-                ) IS NULL
-
-                THEN RAISE(
-                    ABORT,
-                    'Não foi possível registrar o tipo histórico da entrevista.'
-                )
-
-            END;
-
-        END;
-        """
-    )
-
-    # --------------------------------------------------------
-    # IMUTABILIDADE
-    # --------------------------------------------------------
-
-    cursor.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS
-            trg_entrevistas_tipo_snapshot_imutavel
-
-        BEFORE UPDATE OF
-
-            tipo_entrevista_nome_aplicado,
-            tipo_entrevista_descricao_aplicada
-
-        ON entrevistas
-
-        FOR EACH ROW
-
-        WHEN
-
-            OLD.tipo_entrevista_nome_aplicado IS NOT NULL
-
-            AND (
-
-                NEW.tipo_entrevista_nome_aplicado
-                    IS NOT OLD.tipo_entrevista_nome_aplicado
-
-                OR NEW.tipo_entrevista_descricao_aplicada
-                    IS NOT OLD.tipo_entrevista_descricao_aplicada
-
-            )
-
-        BEGIN
-
-            SELECT RAISE(
-                ABORT,
-                'O snapshot histórico do tipo de entrevista não pode ser alterado.'
-            );
-
-        END;
-        """
-    )
-
-
-# ============================================================
-# CRIAR TABELAS
+# CRIAÇÃO DAS TABELAS
 # ============================================================
 
 def criar_tabelas():
     """
-    Cria e migra a estrutura completa do banco.
+    Cria as tabelas necessárias e evolui estruturas antigas.
+
+    CREATE TABLE IF NOT EXISTS preserva bancos já existentes.
+
+    Para colunas adicionadas após as primeiras versões do
+    projeto são utilizadas alterações controladas de schema.
     """
 
     conexao = conectar_banco()
@@ -1232,7 +248,10 @@ def criar_tabelas():
                 ativo INTEGER NOT NULL
                     DEFAULT 1
                     CHECK (
-                        ativo IN (0, 1)
+                        ativo IN (
+                            0,
+                            1
+                        )
                     ),
 
                 data_criacao DATETIME
@@ -1262,11 +281,23 @@ def criar_tabelas():
                 ativo INTEGER NOT NULL
                     DEFAULT 1
                     CHECK (
-                        ativo IN (0, 1)
+                        ativo IN (
+                            0,
+                            1
+                        )
                     ),
 
                 data_criacao DATETIME
-                    DEFAULT CURRENT_TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                usa_area_tecnica INTEGER NOT NULL
+                    DEFAULT 0
+                    CHECK (
+                        usa_area_tecnica IN (
+                            0,
+                            1
+                        )
+                    )
 
             );
             """
@@ -1290,7 +321,10 @@ def criar_tabelas():
                 ativa INTEGER NOT NULL
                     DEFAULT 1
                     CHECK (
-                        ativa IN (0, 1)
+                        ativa IN (
+                            0,
+                            1
+                        )
                     )
 
             );
@@ -1299,7 +333,7 @@ def criar_tabelas():
 
 
         # ====================================================
-        # CRITÉRIOS
+        # CRITÉRIOS DE AVALIAÇÃO
         # ====================================================
 
         cursor.execute(
@@ -1323,8 +357,103 @@ def criar_tabelas():
                 ativo INTEGER NOT NULL
                     DEFAULT 1
                     CHECK (
-                        ativo IN (0, 1)
+                        ativo IN (
+                            0,
+                            1
+                        )
                     )
+
+            );
+            """
+        )
+
+
+        # ====================================================
+        # ÁREAS TÉCNICAS
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS areas_tecnicas (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                nome TEXT NOT NULL
+                    COLLATE NOCASE
+                    UNIQUE,
+
+                descricao TEXT,
+
+                ativo INTEGER NOT NULL
+                    DEFAULT 1
+                    CHECK (
+                        ativo IN (
+                            0,
+                            1
+                        )
+                    ),
+
+                ordem INTEGER,
+
+                data_criacao DATETIME
+                    DEFAULT CURRENT_TIMESTAMP
+
+            );
+            """
+        )
+
+
+        # ====================================================
+        # SUBÁREAS TÉCNICAS
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subareas_tecnicas (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                area_tecnica_id INTEGER NOT NULL,
+
+                nome TEXT NOT NULL
+                    COLLATE NOCASE,
+
+                descricao TEXT,
+
+                eh_geral INTEGER NOT NULL
+                    DEFAULT 0
+                    CHECK (
+                        eh_geral IN (
+                            0,
+                            1
+                        )
+                    ),
+
+                ativo INTEGER NOT NULL
+                    DEFAULT 1
+                    CHECK (
+                        ativo IN (
+                            0,
+                            1
+                        )
+                    ),
+
+                ordem INTEGER,
+
+                data_criacao DATETIME
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (
+                    area_tecnica_id
+                )
+                REFERENCES areas_tecnicas(
+                    id
+                ),
+
+                UNIQUE (
+                    area_tecnica_id,
+                    nome
+                )
 
             );
             """
@@ -1354,7 +483,10 @@ def criar_tabelas():
                 ativa INTEGER NOT NULL
                     DEFAULT 1
                     CHECK (
-                        ativa IN (0, 1)
+                        ativa IN (
+                            0,
+                            1
+                        )
                     ),
 
                 peso REAL NOT NULL
@@ -1366,21 +498,46 @@ def criar_tabelas():
                 usa_star INTEGER NOT NULL
                     DEFAULT 0
                     CHECK (
-                        usa_star IN (0, 1)
+                        usa_star IN (
+                            0,
+                            1
+                        )
                     ),
 
                 data_criacao DATETIME
                     DEFAULT CURRENT_TIMESTAMP,
 
+                area_tecnica_id INTEGER,
+
+                subarea_tecnica_id INTEGER,
+
                 FOREIGN KEY (
                     tipo_entrevista_id
                 )
-                REFERENCES tipos_entrevista(id),
+                REFERENCES tipos_entrevista(
+                    id
+                ),
 
                 FOREIGN KEY (
                     competencia_id
                 )
-                REFERENCES competencias(id)
+                REFERENCES competencias(
+                    id
+                ),
+
+                FOREIGN KEY (
+                    area_tecnica_id
+                )
+                REFERENCES areas_tecnicas(
+                    id
+                ),
+
+                FOREIGN KEY (
+                    subarea_tecnica_id
+                )
+                REFERENCES subareas_tecnicas(
+                    id
+                )
 
             );
             """
@@ -1427,15 +584,114 @@ def criar_tabelas():
 
                 tipo_entrevista_descricao_aplicada TEXT,
 
+                area_tecnica_id INTEGER,
+
+                subarea_tecnica_id INTEGER,
+
+                area_tecnica_nome_aplicado TEXT,
+
+                subarea_tecnica_nome_aplicado TEXT,
+
                 FOREIGN KEY (
                     usuario_id
                 )
-                REFERENCES usuarios(id),
+                REFERENCES usuarios(
+                    id
+                ),
 
                 FOREIGN KEY (
                     tipo_entrevista_id
                 )
-                REFERENCES tipos_entrevista(id)
+                REFERENCES tipos_entrevista(
+                    id
+                ),
+
+                FOREIGN KEY (
+                    area_tecnica_id
+                )
+                REFERENCES areas_tecnicas(
+                    id
+                ),
+
+                FOREIGN KEY (
+                    subarea_tecnica_id
+                )
+                REFERENCES subareas_tecnicas(
+                    id
+                )
+
+            );
+            """
+        )
+
+
+        # ====================================================
+        # PERGUNTAS APLICADAS À ENTREVISTA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entrevista_perguntas (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                entrevista_id INTEGER NOT NULL,
+
+                pergunta_id INTEGER NOT NULL,
+
+                pergunta_texto_aplicado TEXT NOT NULL,
+
+                exemplo_esperado_aplicado TEXT,
+
+                competencia_id_aplicada INTEGER NOT NULL,
+
+                competencia_nome_aplicada TEXT NOT NULL,
+
+                area_tecnica_id_aplicada INTEGER,
+
+                area_tecnica_nome_aplicada TEXT,
+
+                subarea_tecnica_id_aplicada INTEGER,
+
+                subarea_tecnica_nome_aplicada TEXT,
+
+                peso_pergunta_aplicado REAL NOT NULL
+                    CHECK (
+                        peso_pergunta_aplicado >= 0
+                    ),
+
+                usa_star_aplicado INTEGER NOT NULL
+                    CHECK (
+                        usa_star_aplicado IN (
+                            0,
+                            1
+                        )
+                    ),
+
+                ordem_pergunta_aplicada INTEGER,
+
+                data_aplicacao DATETIME
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                FOREIGN KEY (
+                    entrevista_id
+                )
+                REFERENCES entrevistas(
+                    id
+                )
+                ON DELETE CASCADE,
+
+                FOREIGN KEY (
+                    pergunta_id
+                )
+                REFERENCES perguntas(
+                    id
+                ),
+
+                UNIQUE (
+                    entrevista_id,
+                    pergunta_id
+                )
 
             );
             """
@@ -1475,30 +731,26 @@ def criar_tabelas():
 
                 competencia_nome_aplicada TEXT,
 
-                peso_pergunta_aplicado REAL
-                    CHECK (
-                        peso_pergunta_aplicado IS NULL
-                        OR peso_pergunta_aplicado >= 0
-                    ),
+                peso_pergunta_aplicado REAL,
 
-                usa_star_aplicado INTEGER
-                    CHECK (
-                        usa_star_aplicado IS NULL
-                        OR usa_star_aplicado IN (0, 1)
-                    ),
+                usa_star_aplicado INTEGER,
 
                 ordem_pergunta_aplicada INTEGER,
 
                 FOREIGN KEY (
                     entrevista_id
                 )
-                REFERENCES entrevistas(id)
+                REFERENCES entrevistas(
+                    id
+                )
                 ON DELETE CASCADE,
 
                 FOREIGN KEY (
                     pergunta_id
                 )
-                REFERENCES perguntas(id),
+                REFERENCES perguntas(
+                    id
+                ),
 
                 UNIQUE (
                     entrevista_id,
@@ -1545,7 +797,9 @@ def criar_tabelas():
                 FOREIGN KEY (
                     resposta_id
                 )
-                REFERENCES respostas(id)
+                REFERENCES respostas(
+                    id
+                )
                 ON DELETE CASCADE
 
             );
@@ -1575,11 +829,7 @@ def criar_tabelas():
 
                 observacao TEXT,
 
-                peso_aplicado REAL
-                    CHECK (
-                        peso_aplicado IS NULL
-                        OR peso_aplicado >= 0
-                    ),
+                peso_aplicado REAL,
 
                 criterio_nome_aplicado TEXT,
 
@@ -1590,13 +840,17 @@ def criar_tabelas():
                 FOREIGN KEY (
                     avaliacao_id
                 )
-                REFERENCES avaliacoes(id)
+                REFERENCES avaliacoes(
+                    id
+                )
                 ON DELETE CASCADE,
 
                 FOREIGN KEY (
                     criterio_id
                 )
-                REFERENCES criterios_avaliacao(id),
+                REFERENCES criterios_avaliacao(
+                    id
+                ),
 
                 UNIQUE (
                     avaliacao_id,
@@ -1605,44 +859,6 @@ def criar_tabelas():
 
             );
             """
-        )
-
-
-        # ====================================================
-        # MIGRAÇÕES
-        # ====================================================
-
-        _migrar_peso_aplicado(
-            cursor
-        )
-
-        _migrar_snapshot_criterios(
-            cursor
-        )
-
-        _migrar_snapshot_perguntas(
-            cursor
-        )
-
-        _migrar_snapshot_tipo_entrevista(
-            cursor
-        )
-
-
-        # ====================================================
-        # TRIGGERS
-        # ====================================================
-
-        _criar_triggers_snapshot_criterios(
-            cursor
-        )
-
-        _criar_triggers_snapshot_pergunta(
-            cursor
-        )
-
-        _criar_triggers_snapshot_tipo_entrevista(
-            cursor
         )
 
 
@@ -1670,7 +886,9 @@ def criar_tabelas():
                 FOREIGN KEY (
                     usuario_id
                 )
-                REFERENCES usuarios(id)
+                REFERENCES usuarios(
+                    id
+                )
 
             );
             """
@@ -1702,6 +920,764 @@ def criar_tabelas():
 
 
         # ====================================================
+        # EVOLUÇÃO DE BANCOS EXISTENTES
+        # ====================================================
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "tipos_entrevista",
+            "usa_area_tecnica",
+            """
+            INTEGER NOT NULL
+            DEFAULT 0
+            CHECK (
+                usa_area_tecnica IN (
+                    0,
+                    1
+                )
+            )
+            """
+        )
+
+
+        # ----------------------------------------------------
+        # PERGUNTAS
+        # ----------------------------------------------------
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "perguntas",
+            "area_tecnica_id",
+            """
+            INTEGER
+            REFERENCES areas_tecnicas(
+                id
+            )
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "perguntas",
+            "subarea_tecnica_id",
+            """
+            INTEGER
+            REFERENCES subareas_tecnicas(
+                id
+            )
+            """
+        )
+
+
+        # ----------------------------------------------------
+        # ENTREVISTAS
+        # ----------------------------------------------------
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "entrevistas",
+            "tipo_entrevista_nome_aplicado",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "entrevistas",
+            "tipo_entrevista_descricao_aplicada",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "entrevistas",
+            "area_tecnica_id",
+            """
+            INTEGER
+            REFERENCES areas_tecnicas(
+                id
+            )
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "entrevistas",
+            "subarea_tecnica_id",
+            """
+            INTEGER
+            REFERENCES subareas_tecnicas(
+                id
+            )
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "entrevistas",
+            "area_tecnica_nome_aplicado",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "entrevistas",
+            "subarea_tecnica_nome_aplicado",
+            """
+            TEXT
+            """
+        )
+
+
+        # ----------------------------------------------------
+        # RESPOSTAS
+        # ----------------------------------------------------
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "respostas",
+            "pergunta_texto_aplicado",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "respostas",
+            "exemplo_esperado_aplicado",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "respostas",
+            "competencia_id_aplicada",
+            """
+            INTEGER
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "respostas",
+            "competencia_nome_aplicada",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "respostas",
+            "peso_pergunta_aplicado",
+            """
+            REAL
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "respostas",
+            "usa_star_aplicado",
+            """
+            INTEGER
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "respostas",
+            "ordem_pergunta_aplicada",
+            """
+            INTEGER
+            """
+        )
+
+
+        # ----------------------------------------------------
+        # AVALIAÇÃO POR CRITÉRIO
+        # ----------------------------------------------------
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "avaliacao_criterios",
+            "peso_aplicado",
+            """
+            REAL
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "avaliacao_criterios",
+            "criterio_nome_aplicado",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "avaliacao_criterios",
+            "criterio_descricao_aplicada",
+            """
+            TEXT
+            """
+        )
+
+        _adicionar_coluna_se_ausente(
+            cursor,
+            "avaliacao_criterios",
+            "criterio_ordem_aplicada",
+            """
+            INTEGER
+            """
+        )
+
+
+        # ====================================================
+        # MIGRAÇÃO DE TRIGGERS HISTÓRICOS
+        # ====================================================
+        #
+        # Bancos criados em fases anteriores podem possuir
+        # triggers antigos com nomes diferentes ou definições
+        # anteriores às regras atuais de snapshot.
+        #
+        # CREATE TRIGGER IF NOT EXISTS não substitui um trigger
+        # já existente. Por isso, antes dos backfills e da
+        # recriação dos triggers oficiais desta versão, removemos:
+        #
+        # - triggers legados;
+        # - triggers atuais que possam existir com definição antiga.
+        #
+        # Todos eles serão recriados mais abaixo com a definição
+        # oficial desta versão.
+        # ====================================================
+
+        triggers_snapshot_para_recriar = (
+
+            # ------------------------------------------------
+            # Tipos de entrevista / área técnica
+            # ------------------------------------------------
+
+            "trg_tipos_entrevista_tecnica_area",
+
+            # ------------------------------------------------
+            # Proteção da subárea Geral
+            # ------------------------------------------------
+
+            "trg_subarea_geral_nao_inativar",
+            "trg_subarea_geral_identidade_imutavel",
+            "trg_subarea_geral_nao_excluir",
+
+            # ------------------------------------------------
+            # Snapshot da entrevista - nomes atuais
+            # ------------------------------------------------
+
+            "trg_entrevistas_snapshot_tipo_insert",
+            "trg_entrevistas_snapshot_tipo_imutavel",
+            "trg_entrevistas_snapshot_area_insert",
+            "trg_entrevistas_area_imutavel",
+
+            # ------------------------------------------------
+            # Snapshot da entrevista - nomes legados
+            # ------------------------------------------------
+
+            "trg_entrevistas_tipo_snapshot_insert",
+            "trg_entrevistas_tipo_snapshot_imutavel",
+
+            # ------------------------------------------------
+            # Snapshot da resposta
+            # ------------------------------------------------
+
+            "trg_respostas_snapshot_insert",
+            "trg_respostas_snapshot_imutavel",
+
+            # Trigger legado que impedia inserir snapshots
+            # diretamente a partir de entrevista_perguntas.
+            "trg_respostas_snapshot_insert_protegido",
+
+            # ------------------------------------------------
+            # Snapshot dos critérios
+            # ------------------------------------------------
+
+            "trg_avaliacao_criterios_snapshot_insert",
+            "trg_avaliacao_criterios_snapshot_imutavel",
+
+            # ------------------------------------------------
+            # Perguntas congeladas da entrevista
+            # ------------------------------------------------
+
+            "trg_entrevista_perguntas_snapshot_imutavel"
+
+        )
+
+
+        for nome_trigger in triggers_snapshot_para_recriar:
+
+            cursor.execute(
+                f"DROP TRIGGER IF EXISTS {nome_trigger};"
+            )
+
+
+        # ====================================================
+        # BACKFILL - TIPO DE ENTREVISTA
+        # ====================================================
+
+        cursor.execute(
+            """
+            UPDATE entrevistas
+
+            SET tipo_entrevista_nome_aplicado = (
+
+                SELECT
+                    t.nome
+
+                FROM tipos_entrevista t
+
+                WHERE t.id =
+                    entrevistas.tipo_entrevista_id
+
+            )
+
+            WHERE tipo_entrevista_nome_aplicado
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE entrevistas
+
+            SET tipo_entrevista_descricao_aplicada = (
+
+                SELECT
+                    t.descricao
+
+                FROM tipos_entrevista t
+
+                WHERE t.id =
+                    entrevistas.tipo_entrevista_id
+
+            )
+
+            WHERE tipo_entrevista_descricao_aplicada
+                IS NULL;
+            """
+        )
+
+
+        # ====================================================
+        # BACKFILL - SNAPSHOT DAS RESPOSTAS
+        # ====================================================
+
+        cursor.execute(
+            """
+            UPDATE respostas
+
+            SET pergunta_texto_aplicado = (
+
+                SELECT
+                    p.texto
+
+                FROM perguntas p
+
+                WHERE p.id =
+                    respostas.pergunta_id
+
+            )
+
+            WHERE pergunta_texto_aplicado
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE respostas
+
+            SET exemplo_esperado_aplicado = (
+
+                SELECT
+                    p.exemplo_esperado
+
+                FROM perguntas p
+
+                WHERE p.id =
+                    respostas.pergunta_id
+
+            )
+
+            WHERE exemplo_esperado_aplicado
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE respostas
+
+            SET competencia_id_aplicada = (
+
+                SELECT
+                    p.competencia_id
+
+                FROM perguntas p
+
+                WHERE p.id =
+                    respostas.pergunta_id
+
+            )
+
+            WHERE competencia_id_aplicada
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE respostas
+
+            SET competencia_nome_aplicada = (
+
+                SELECT
+                    c.nome
+
+                FROM perguntas p
+
+                INNER JOIN competencias c
+                    ON c.id =
+                        p.competencia_id
+
+                WHERE p.id =
+                    respostas.pergunta_id
+
+            )
+
+            WHERE competencia_nome_aplicada
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE respostas
+
+            SET peso_pergunta_aplicado = (
+
+                SELECT
+                    p.peso
+
+                FROM perguntas p
+
+                WHERE p.id =
+                    respostas.pergunta_id
+
+            )
+
+            WHERE peso_pergunta_aplicado
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE respostas
+
+            SET usa_star_aplicado = (
+
+                SELECT
+                    p.usa_star
+
+                FROM perguntas p
+
+                WHERE p.id =
+                    respostas.pergunta_id
+
+            )
+
+            WHERE usa_star_aplicado
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE respostas
+
+            SET ordem_pergunta_aplicada = (
+
+                SELECT
+                    p.ordem
+
+                FROM perguntas p
+
+                WHERE p.id =
+                    respostas.pergunta_id
+
+            )
+
+            WHERE ordem_pergunta_aplicada
+                IS NULL;
+            """
+        )
+
+
+        # ====================================================
+        # BACKFILL - SNAPSHOT DOS CRITÉRIOS
+        # ====================================================
+
+        cursor.execute(
+            """
+            UPDATE avaliacao_criterios
+
+            SET peso_aplicado = (
+
+                SELECT
+                    c.peso
+
+                FROM criterios_avaliacao c
+
+                WHERE c.id =
+                    avaliacao_criterios.criterio_id
+
+            )
+
+            WHERE peso_aplicado
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE avaliacao_criterios
+
+            SET criterio_nome_aplicado = (
+
+                SELECT
+                    c.nome
+
+                FROM criterios_avaliacao c
+
+                WHERE c.id =
+                    avaliacao_criterios.criterio_id
+
+            )
+
+            WHERE criterio_nome_aplicado
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE avaliacao_criterios
+
+            SET criterio_descricao_aplicada = (
+
+                SELECT
+                    c.descricao
+
+                FROM criterios_avaliacao c
+
+                WHERE c.id =
+                    avaliacao_criterios.criterio_id
+
+            )
+
+            WHERE criterio_descricao_aplicada
+                IS NULL;
+            """
+        )
+
+
+        cursor.execute(
+            """
+            UPDATE avaliacao_criterios
+
+            SET criterio_ordem_aplicada = (
+
+                SELECT
+                    c.ordem
+
+                FROM criterios_avaliacao c
+
+                WHERE c.id =
+                    avaliacao_criterios.criterio_id
+
+            )
+
+            WHERE criterio_ordem_aplicada
+                IS NULL;
+            """
+        )
+
+
+        # ====================================================
+        # CADASTRAR ÁREAS TÉCNICAS INICIAIS
+        # ====================================================
+
+        for (
+            nome,
+            descricao,
+            ordem
+        ) in AREAS_TECNICAS_INICIAIS:
+
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO areas_tecnicas (
+
+                    nome,
+                    descricao,
+                    ativo,
+                    ordem
+
+                )
+
+                VALUES (
+                    ?,
+                    ?,
+                    1,
+                    ?
+                )
+                """,
+                (
+                    nome,
+                    descricao,
+                    ordem
+                )
+            )
+
+
+            # ------------------------------------------------
+            # RECUPERAR A ÁREA
+            # ------------------------------------------------
+
+            cursor.execute(
+                """
+                SELECT
+                    id
+
+                FROM areas_tecnicas
+
+                WHERE nome = ?
+                    COLLATE NOCASE
+
+                LIMIT 1
+                """,
+                (
+                    nome,
+                )
+            )
+
+
+            area = cursor.fetchone()
+
+
+            if area is None:
+
+                raise sqlite3.DatabaseError(
+                    "Não foi possível localizar "
+                    f"a área técnica '{nome}'."
+                )
+
+
+            # ------------------------------------------------
+            # GARANTIR SUBÁREA GERAL
+            # ------------------------------------------------
+
+            cursor.execute(
+                """
+                SELECT
+                    id
+
+                FROM subareas_tecnicas
+
+                WHERE area_tecnica_id = ?
+                  AND eh_geral = 1
+
+                LIMIT 1
+                """,
+                (
+                    area["id"],
+                )
+            )
+
+
+            geral = cursor.fetchone()
+
+
+            if geral is None:
+
+                cursor.execute(
+                    """
+                    INSERT INTO subareas_tecnicas (
+
+                        area_tecnica_id,
+                        nome,
+                        descricao,
+                        eh_geral,
+                        ativo,
+                        ordem
+
+                    )
+
+                    VALUES (
+                        ?,
+                        'Geral',
+                        ?,
+                        1,
+                        1,
+                        1
+                    )
+                    """,
+                    (
+                        area["id"],
+
+                        (
+                            "Subárea padrão destinada "
+                            "a perguntas gerais da área."
+                        )
+                    )
+                )
+
+
+        # ====================================================
+        # CONFIGURAR TIPO TÉCNICA EXISTENTE
+        # ====================================================
+
+        cursor.execute(
+            """
+            UPDATE tipos_entrevista
+
+            SET usa_area_tecnica = 1
+
+            WHERE LOWER(nome) IN (
+                'técnica',
+                'tecnica'
+            );
+            """
+        )
+
+
+        # ====================================================
         # ÍNDICES
         # ====================================================
 
@@ -1716,6 +1692,7 @@ def criar_tabelas():
             """
         )
 
+
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS
@@ -1726,6 +1703,57 @@ def criar_tabelas():
             );
             """
         )
+
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_perguntas_area_tecnica
+
+            ON perguntas (
+                area_tecnica_id
+            );
+            """
+        )
+
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_perguntas_subarea_tecnica
+
+            ON perguntas (
+                subarea_tecnica_id
+            );
+            """
+        )
+
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_subareas_tecnicas_area
+
+            ON subareas_tecnicas (
+                area_tecnica_id
+            );
+            """
+        )
+
+
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_subareas_tecnicas_uma_geral_por_area
+
+            ON subareas_tecnicas (
+                area_tecnica_id
+            )
+
+            WHERE eh_geral = 1;
+            """
+        )
+
 
         cursor.execute(
             """
@@ -1738,6 +1766,55 @@ def criar_tabelas():
             """
         )
 
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_entrevistas_area_tecnica
+
+            ON entrevistas (
+                area_tecnica_id
+            );
+            """
+        )
+
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_entrevistas_subarea_tecnica
+
+            ON entrevistas (
+                subarea_tecnica_id
+            );
+            """
+        )
+
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_entrevista_perguntas_entrevista
+
+            ON entrevista_perguntas (
+                entrevista_id
+            );
+            """
+        )
+
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_entrevista_perguntas_pergunta
+
+            ON entrevista_perguntas (
+                pergunta_id
+            );
+            """
+        )
+
+
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS
@@ -1748,6 +1825,7 @@ def criar_tabelas():
             );
             """
         )
+
 
         cursor.execute(
             """
@@ -1762,28 +1840,741 @@ def criar_tabelas():
 
 
         # ====================================================
-        # FINALIZAR
+        # TRIGGER - NOVO TIPO TÉCNICA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_tipos_entrevista_tecnica_area
+
+            AFTER INSERT
+            ON tipos_entrevista
+
+            WHEN LOWER(NEW.nome) IN (
+                'técnica',
+                'tecnica'
+            )
+
+            BEGIN
+
+                UPDATE tipos_entrevista
+
+                SET usa_area_tecnica = 1
+
+                WHERE id = NEW.id;
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - GERAL NÃO PODE SER INATIVADA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_subarea_geral_nao_inativar
+
+            BEFORE UPDATE OF ativo
+            ON subareas_tecnicas
+
+            WHEN
+
+                OLD.eh_geral = 1
+
+                AND
+
+                NEW.ativo = 0
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'A subárea Geral não pode ser inativada.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - GERAL NÃO PODE SER RENOMEADA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_subarea_geral_identidade_imutavel
+
+            BEFORE UPDATE OF
+                nome,
+                eh_geral
+
+            ON subareas_tecnicas
+
+            WHEN
+
+                OLD.eh_geral = 1
+
+                AND
+
+                (
+                    NEW.eh_geral <> 1
+
+                    OR
+
+                    NEW.nome <> OLD.nome
+                )
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'A subárea Geral não pode ser renomeada ou descaracterizada.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - GERAL NÃO PODE SER EXCLUÍDA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_subarea_geral_nao_excluir
+
+            BEFORE DELETE
+            ON subareas_tecnicas
+
+            WHEN OLD.eh_geral = 1
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'A subárea Geral não pode ser excluída.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - SNAPSHOT DO TIPO DE ENTREVISTA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_entrevistas_snapshot_tipo_insert
+
+            AFTER INSERT
+            ON entrevistas
+
+            WHEN
+                NEW.tipo_entrevista_nome_aplicado
+                IS NULL
+
+            BEGIN
+
+                UPDATE entrevistas
+
+                SET
+
+                    tipo_entrevista_nome_aplicado = (
+
+                        SELECT
+                            t.nome
+
+                        FROM tipos_entrevista t
+
+                        WHERE t.id =
+                            NEW.tipo_entrevista_id
+
+                    ),
+
+                    tipo_entrevista_descricao_aplicada = (
+
+                        SELECT
+                            t.descricao
+
+                        FROM tipos_entrevista t
+
+                        WHERE t.id =
+                            NEW.tipo_entrevista_id
+
+                    )
+
+                WHERE id =
+                    NEW.id;
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - TIPO HISTÓRICO É IMUTÁVEL
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_entrevistas_snapshot_tipo_imutavel
+
+            BEFORE UPDATE OF
+
+                tipo_entrevista_nome_aplicado,
+                tipo_entrevista_descricao_aplicada
+
+            ON entrevistas
+
+            WHEN
+                OLD.tipo_entrevista_nome_aplicado
+                IS NOT NULL
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'O snapshot do tipo de entrevista é imutável.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - SNAPSHOT DE ÁREA/SUBÁREA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_entrevistas_snapshot_area_insert
+
+            AFTER INSERT
+            ON entrevistas
+
+            WHEN
+
+                NEW.area_tecnica_id
+                    IS NOT NULL
+
+                OR
+
+                NEW.subarea_tecnica_id
+                    IS NOT NULL
+
+            BEGIN
+
+                UPDATE entrevistas
+
+                SET
+
+                    area_tecnica_nome_aplicado = CASE
+
+                        WHEN NEW.area_tecnica_id
+                            IS NULL
+
+                        THEN NULL
+
+                        ELSE (
+
+                            SELECT
+                                a.nome
+
+                            FROM areas_tecnicas a
+
+                            WHERE a.id =
+                                NEW.area_tecnica_id
+
+                        )
+
+                    END,
+
+                    subarea_tecnica_nome_aplicado = CASE
+
+                        WHEN NEW.subarea_tecnica_id
+                            IS NULL
+
+                        THEN NULL
+
+                        ELSE (
+
+                            SELECT
+                                s.nome
+
+                            FROM subareas_tecnicas s
+
+                            WHERE s.id =
+                                NEW.subarea_tecnica_id
+
+                        )
+
+                    END
+
+                WHERE id =
+                    NEW.id;
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - ÁREA/SUBÁREA HISTÓRICAS SÃO IMUTÁVEIS
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_entrevistas_area_imutavel
+
+            BEFORE UPDATE OF
+
+                area_tecnica_id,
+                subarea_tecnica_id,
+                area_tecnica_nome_aplicado,
+                subarea_tecnica_nome_aplicado
+
+            ON entrevistas
+
+            WHEN
+
+                OLD.area_tecnica_nome_aplicado
+                    IS NOT NULL
+
+                OR
+
+                OLD.subarea_tecnica_nome_aplicado
+                    IS NOT NULL
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'A área e a subárea aplicadas à entrevista são imutáveis.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - SNAPSHOT DA RESPOSTA
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_respostas_snapshot_insert
+
+            AFTER INSERT
+            ON respostas
+
+            WHEN
+
+                NEW.pergunta_texto_aplicado
+                    IS NULL
+
+                OR
+
+                NEW.competencia_nome_aplicada
+                    IS NULL
+
+                OR
+
+                NEW.peso_pergunta_aplicado
+                    IS NULL
+
+                OR
+
+                NEW.usa_star_aplicado
+                    IS NULL
+
+            BEGIN
+
+                UPDATE respostas
+
+                SET
+
+                    pergunta_texto_aplicado = COALESCE(
+
+                        NEW.pergunta_texto_aplicado,
+
+                        (
+                            SELECT
+                                p.texto
+
+                            FROM perguntas p
+
+                            WHERE p.id =
+                                NEW.pergunta_id
+                        )
+
+                    ),
+
+                    exemplo_esperado_aplicado = COALESCE(
+
+                        NEW.exemplo_esperado_aplicado,
+
+                        (
+                            SELECT
+                                p.exemplo_esperado
+
+                            FROM perguntas p
+
+                            WHERE p.id =
+                                NEW.pergunta_id
+                        )
+
+                    ),
+
+                    competencia_id_aplicada = COALESCE(
+
+                        NEW.competencia_id_aplicada,
+
+                        (
+                            SELECT
+                                p.competencia_id
+
+                            FROM perguntas p
+
+                            WHERE p.id =
+                                NEW.pergunta_id
+                        )
+
+                    ),
+
+                    competencia_nome_aplicada = COALESCE(
+
+                        NEW.competencia_nome_aplicada,
+
+                        (
+                            SELECT
+                                c.nome
+
+                            FROM perguntas p
+
+                            INNER JOIN competencias c
+
+                                ON c.id =
+                                    p.competencia_id
+
+                            WHERE p.id =
+                                NEW.pergunta_id
+                        )
+
+                    ),
+
+                    peso_pergunta_aplicado = COALESCE(
+
+                        NEW.peso_pergunta_aplicado,
+
+                        (
+                            SELECT
+                                p.peso
+
+                            FROM perguntas p
+
+                            WHERE p.id =
+                                NEW.pergunta_id
+                        )
+
+                    ),
+
+                    usa_star_aplicado = COALESCE(
+
+                        NEW.usa_star_aplicado,
+
+                        (
+                            SELECT
+                                p.usa_star
+
+                            FROM perguntas p
+
+                            WHERE p.id =
+                                NEW.pergunta_id
+                        )
+
+                    ),
+
+                    ordem_pergunta_aplicada = COALESCE(
+
+                        NEW.ordem_pergunta_aplicada,
+
+                        (
+                            SELECT
+                                p.ordem
+
+                            FROM perguntas p
+
+                            WHERE p.id =
+                                NEW.pergunta_id
+                        )
+
+                    )
+
+                WHERE id =
+                    NEW.id;
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - SNAPSHOT DA RESPOSTA É IMUTÁVEL
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_respostas_snapshot_imutavel
+
+            BEFORE UPDATE OF
+
+                pergunta_texto_aplicado,
+                exemplo_esperado_aplicado,
+                competencia_id_aplicada,
+                competencia_nome_aplicada,
+                peso_pergunta_aplicado,
+                usa_star_aplicado,
+                ordem_pergunta_aplicada
+
+            ON respostas
+
+            WHEN
+
+                OLD.pergunta_texto_aplicado
+                    IS NOT NULL
+
+                AND
+
+                OLD.competencia_nome_aplicada
+                    IS NOT NULL
+
+                AND
+
+                OLD.peso_pergunta_aplicado
+                    IS NOT NULL
+
+                AND
+
+                OLD.usa_star_aplicado
+                    IS NOT NULL
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'O snapshot histórico da pergunta é imutável.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - SNAPSHOT DOS CRITÉRIOS
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_avaliacao_criterios_snapshot_insert
+
+            AFTER INSERT
+            ON avaliacao_criterios
+
+            WHEN
+
+                NEW.peso_aplicado
+                    IS NULL
+
+                OR
+
+                NEW.criterio_nome_aplicado
+                    IS NULL
+
+            BEGIN
+
+                UPDATE avaliacao_criterios
+
+                SET
+
+                    peso_aplicado = COALESCE(
+
+                        NEW.peso_aplicado,
+
+                        (
+                            SELECT
+                                c.peso
+
+                            FROM criterios_avaliacao c
+
+                            WHERE c.id =
+                                NEW.criterio_id
+                        )
+
+                    ),
+
+                    criterio_nome_aplicado = COALESCE(
+
+                        NEW.criterio_nome_aplicado,
+
+                        (
+                            SELECT
+                                c.nome
+
+                            FROM criterios_avaliacao c
+
+                            WHERE c.id =
+                                NEW.criterio_id
+                        )
+
+                    ),
+
+                    criterio_descricao_aplicada = COALESCE(
+
+                        NEW.criterio_descricao_aplicada,
+
+                        (
+                            SELECT
+                                c.descricao
+
+                            FROM criterios_avaliacao c
+
+                            WHERE c.id =
+                                NEW.criterio_id
+                        )
+
+                    ),
+
+                    criterio_ordem_aplicada = COALESCE(
+
+                        NEW.criterio_ordem_aplicada,
+
+                        (
+                            SELECT
+                                c.ordem
+
+                            FROM criterios_avaliacao c
+
+                            WHERE c.id =
+                                NEW.criterio_id
+                        )
+
+                    )
+
+                WHERE id =
+                    NEW.id;
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - SNAPSHOT DO CRITÉRIO É IMUTÁVEL
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_avaliacao_criterios_snapshot_imutavel
+
+            BEFORE UPDATE OF
+
+                peso_aplicado,
+                criterio_nome_aplicado,
+                criterio_descricao_aplicada,
+                criterio_ordem_aplicada
+
+            ON avaliacao_criterios
+
+            WHEN
+
+                OLD.peso_aplicado
+                    IS NOT NULL
+
+                AND
+
+                OLD.criterio_nome_aplicado
+                    IS NOT NULL
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'O snapshot histórico do critério é imutável.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # TRIGGER - ENTREVISTA_PERGUNTAS É IMUTÁVEL
+        # ====================================================
+
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS
+                trg_entrevista_perguntas_snapshot_imutavel
+
+            BEFORE UPDATE
+            ON entrevista_perguntas
+
+            BEGIN
+
+                SELECT RAISE(
+                    ABORT,
+                    'O snapshot da pergunta aplicada à entrevista é imutável.'
+                );
+
+            END;
+            """
+        )
+
+
+        # ====================================================
+        # CONFIRMAR ALTERAÇÕES
         # ====================================================
 
         conexao.commit()
 
+
         print(
-            "Banco de dados versão 0.5 "
+            "Banco de dados versão 0.6 "
             "criado/atualizado com sucesso."
         )
 
 
-    except (
-        sqlite3.Error,
-        ValueError
-    ) as erro:
+    except sqlite3.Error as erro:
 
         conexao.rollback()
 
+
         print(
-            f"Erro ao criar/atualizar "
+            "Erro ao criar/atualizar "
             f"o banco de dados: {erro}"
         )
+
 
         raise
 

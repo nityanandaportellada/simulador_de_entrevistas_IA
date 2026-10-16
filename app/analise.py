@@ -4,74 +4,74 @@ analise.py
 Módulo responsável pela análise das respostas utilizando
 a API da OpenAI ou o modo MOCK durante o desenvolvimento.
 
-Versão: 0.7
+Versão: 0.8
 
 Responsabilidades:
 
-- recuperar perguntas e respostas do banco;
-- recuperar critérios de avaliação;
-- construir as instruções para a OpenAI;
+- recuperar respostas utilizando snapshots históricos;
+- recuperar o tipo de entrevista aplicado;
+- recuperar área e subárea aplicadas;
+- recuperar pergunta e competência históricas;
+- recuperar critérios ativos de avaliação;
+- congelar em memória os critérios utilizados por uma entrevista;
+- construir as instruções de avaliação;
+- acrescentar contexto técnico de área/subárea;
 - permitir execução simulada através de MOCK_OPENAI;
 - enviar respostas para a OpenAI Responses API;
-- receber o resultado da análise;
-- validar o JSON retornado;
+- validar o resultado retornado;
 - armazenar avaliações;
 - armazenar notas por critério;
+- preservar os pesos e dados históricos dos critérios;
 - controlar o status da entrevista;
-- tratar falhas da API;
-- impedir avaliações parciais de uma entrevista;
-- permitir nova tentativa segura após erro de análise;
-- impedir duas análises simultâneas da mesma entrevista.
+- impedir análise concorrente da mesma entrevista;
+- limpar avaliações parciais caso ocorra falha;
+- executar o Motor de Pontuação.
+
+IMPORTANTE:
+
+O sistema continua utilizando MOCK_OPENAI=true
+durante a fase atual de desenvolvimento.
+
+Quando MOCK_OPENAI=true:
+
+- nenhuma chamada externa é realizada;
+- não é necessária OPENAI_API_KEY;
+- o restante do fluxo funciona normalmente.
+
+A integração real será validada posteriormente.
 
 INTEGRIDADE HISTÓRICA:
 
-Os dados da pergunta utilizados na análise são recuperados
-do snapshot armazenado em respostas.
+A análise utiliza os snapshots gravados nas respostas
+e na entrevista.
 
-O tipo de entrevista também é recuperado do snapshot
-armazenado em entrevistas.
+Além disso, os critérios ativos são carregados
+UMA ÚNICA VEZ no início da análise da entrevista.
 
-Assim, alterações administrativas posteriores não
-modificam o contexto histórico da análise.
+Isso garante que todas as respostas da mesma entrevista
+sejam avaliadas utilizando exatamente o mesmo conjunto
+de critérios, mesmo que um administrador altere os
+cadastros enquanto a análise estiver sendo processada.
 
-CONSISTÊNCIA TRANSACIONAL:
+Alterações posteriores em:
 
-Cada resposta é persistida individualmente para evitar
-manter uma transação SQLite aberta durante chamadas
-externas de Inteligência Artificial.
+- pergunta;
+- competência;
+- tipo de entrevista;
+- área;
+- subárea;
+- critérios;
+- pesos dos critérios;
 
-A entrevista, entretanto, é tratada como uma única
-unidade lógica.
-
-Se qualquer resposta falhar:
-
-- todas as avaliações da entrevista são removidas;
-- as notas por critério são removidas por ON DELETE CASCADE;
-- o status passa para erro_analise;
-- uma nova tentativa pode começar limpa.
-
-CONTROLE DE CONCORRÊNCIA:
-
-A aquisição da entrevista para análise é realizada
-atomicamente com BEGIN IMMEDIATE.
-
-Somente uma requisição pode alterar uma entrevista de:
-
-    finalizada
-    erro_analise
-
-para:
-
-    em_analise
-
-As demais requisições são rejeitadas antes de iniciar
-o processamento.
+não modificam avaliações históricas.
 """
 
 import json
 import os
 import sqlite3
+
 from typing import Any
+
 
 from openai import OpenAI
 
@@ -83,6 +83,7 @@ try:
     from .avaliacao import (
         processar_avaliacao
     )
+
 
 except ImportError:
 
@@ -109,23 +110,60 @@ NOTA_MAXIMA = 10.0
 
 
 # ============================================================
-# MOCK
+# MODO MOCK
 # ============================================================
 
 MOCK_OPENAI = (
+
     os.getenv(
         "MOCK_OPENAI",
         "false"
     )
     .strip()
     .lower()
+
     in (
+
         "1",
+
         "true",
+
         "yes",
+
         "sim"
+
     )
+
 )
+
+
+# ============================================================
+# VALIDAR ID
+# ============================================================
+
+def _validar_id(
+    valor: int,
+    campo: str
+) -> None:
+    """
+    Valida identificadores numéricos.
+    """
+
+    if not isinstance(
+        valor,
+        int
+    ):
+
+        raise ValueError(
+            f"{campo} inválido."
+        )
+
+
+    if valor <= 0:
+
+        raise ValueError(
+            f"{campo} inválido."
+        )
 
 
 # ============================================================
@@ -134,22 +172,46 @@ MOCK_OPENAI = (
 
 def criar_cliente_openai() -> OpenAI:
     """
-    Cria o cliente da OpenAI.
+    Cria o cliente utilizado para comunicação
+    com a API da OpenAI.
+
+    Esta função somente é executada quando
+    MOCK_OPENAI estiver desativado.
     """
 
     api_key = os.getenv(
         "OPENAI_API_KEY"
     )
 
+
     if not api_key:
 
         raise RuntimeError(
-            "A variável OPENAI_API_KEY não foi configurada."
+            "A variável OPENAI_API_KEY "
+            "não foi configurada."
         )
+
 
     return OpenAI(
         api_key=api_key
     )
+
+
+# ============================================================
+# NOME DO MODELO
+# ============================================================
+
+def obter_nome_modelo_avaliacao() -> str:
+    """
+    Retorna o nome armazenado na avaliação.
+    """
+
+    if MOCK_OPENAI:
+
+        return "MOCK_OPENAI"
+
+
+    return MODELO_OPENAI
 
 
 # ============================================================
@@ -158,26 +220,34 @@ def criar_cliente_openai() -> OpenAI:
 
 def buscar_criterios_ativos() -> list[dict]:
     """
-    Recupera os critérios administrativos
-    atualmente ativos.
+    Recupera os critérios atualmente ativos.
 
-    Esses critérios são utilizados somente
-    em novas avaliações.
+    Na análise de uma entrevista esta função
+    será chamada uma única vez.
+
+    O resultado será reutilizado em todas as
+    respostas da mesma entrevista.
     """
 
     conexao = conectar_banco()
 
     cursor = conexao.cursor()
 
+
     try:
 
         cursor.execute(
             """
             SELECT
+
                 id,
+
                 nome,
+
                 descricao,
+
                 peso,
+
                 ordem
 
             FROM criterios_avaliacao
@@ -185,38 +255,80 @@ def buscar_criterios_ativos() -> list[dict]:
             WHERE ativo = 1
 
             ORDER BY
+
                 COALESCE(
                     ordem,
                     999999
                 ),
+
                 id
             """
         )
 
+
         registros = cursor.fetchall()
 
-        return [
-            {
 
-                "id":
-                    registro["id"],
+        criterios = []
 
-                "nome":
-                    registro["nome"],
 
-                "descricao":
-                    registro["descricao"],
+        for registro in registros:
 
-                "peso":
-                    registro["peso"],
+            peso = registro[
+                "peso"
+            ]
 
-                "ordem":
-                    registro["ordem"]
 
-            }
+            if peso is None:
 
-            for registro in registros
-        ]
+                raise ValueError(
+                    "Existe critério ativo sem peso definido."
+                )
+
+
+            if float(
+                peso
+            ) < 0:
+
+                raise ValueError(
+                    "Existe critério ativo com peso negativo."
+                )
+
+
+            criterios.append(
+                {
+
+                    "id":
+                        registro[
+                            "id"
+                        ],
+
+                    "nome":
+                        registro[
+                            "nome"
+                        ],
+
+                    "descricao":
+                        registro[
+                            "descricao"
+                        ],
+
+                    "peso":
+                        float(
+                            peso
+                        ),
+
+                    "ordem":
+                        registro[
+                            "ordem"
+                        ]
+
+                }
+            )
+
+
+        return criterios
+
 
     finally:
 
@@ -224,7 +336,7 @@ def buscar_criterios_ativos() -> list[dict]:
 
 
 # ============================================================
-# BUSCAR DADOS DA RESPOSTA
+# BUSCAR DADOS HISTÓRICOS DA RESPOSTA
 # ============================================================
 
 def buscar_dados_resposta(
@@ -232,23 +344,30 @@ def buscar_dados_resposta(
 ) -> dict | None:
     """
     Recupera todos os dados necessários
-    para analisar uma resposta.
+    para avaliar uma resposta.
 
-    Os dados da pergunta e do tipo de entrevista
-    são obtidos exclusivamente dos snapshots
-    históricos.
+    IMPORTANTE:
+
+    A função NÃO consulta o texto atual da
+    tabela perguntas.
+
+    Também não utiliza o nome atual do tipo,
+    competência, área ou subárea.
+
+    São utilizados os snapshots históricos
+    gravados na entrevista e na resposta.
     """
 
-    if resposta_id <= 0:
-
-        raise ValueError(
-            "O ID da resposta é inválido."
-        )
+    _validar_id(
+        resposta_id,
+        "ID da resposta"
+    )
 
 
     conexao = conectar_banco()
 
     cursor = conexao.cursor()
+
 
     try:
 
@@ -256,13 +375,19 @@ def buscar_dados_resposta(
             """
             SELECT
 
-                r.id AS resposta_id,
+                r.id
+                    AS resposta_id,
 
                 r.entrevista_id,
 
+                r.pergunta_id,
+
                 r.texto_resposta,
 
-                r.pergunta_id,
+                r.tempo_resposta,
+
+                r.data_resposta,
+
 
                 r.pergunta_texto_aplicado
                     AS pergunta,
@@ -270,14 +395,21 @@ def buscar_dados_resposta(
                 r.exemplo_esperado_aplicado
                     AS exemplo_esperado,
 
-                r.usa_star_aplicado
-                    AS usa_star,
-
                 r.competencia_id_aplicada
                     AS competencia_id,
 
                 r.competencia_nome_aplicada
                     AS competencia,
+
+                r.peso_pergunta_aplicado
+                    AS peso_pergunta,
+
+                r.usa_star_aplicado
+                    AS usa_star,
+
+                r.ordem_pergunta_aplicada
+                    AS ordem_pergunta,
+
 
                 e.tipo_entrevista_id,
 
@@ -285,12 +417,26 @@ def buscar_dados_resposta(
                     AS tipo_entrevista,
 
                 e.tipo_entrevista_descricao_aplicada
-                    AS tipo_entrevista_descricao
+                    AS tipo_entrevista_descricao,
+
+
+                e.area_tecnica_id,
+
+                e.area_tecnica_nome_aplicado
+                    AS area_tecnica,
+
+
+                e.subarea_tecnica_id,
+
+                e.subarea_tecnica_nome_aplicado
+                    AS subarea_tecnica
 
             FROM respostas r
 
             INNER JOIN entrevistas e
-                ON e.id = r.entrevista_id
+
+                ON e.id =
+                    r.entrevista_id
 
             WHERE r.id = ?
             """,
@@ -299,36 +445,98 @@ def buscar_dados_resposta(
             )
         )
 
+
         registro = cursor.fetchone()
+
 
         if registro is None:
 
             return None
 
 
+        # ====================================================
+        # VALIDAR SNAPSHOT DA PERGUNTA
+        # ====================================================
+
         if (
-            registro["pergunta"] is None
-
-            or registro[
-                "competencia_id"
-            ] is None
-
-            or registro[
-                "competencia"
-            ] is None
-
-            or registro[
-                "usa_star"
-            ] is None
-
-            or registro[
-                "tipo_entrevista"
-            ] is None
+            registro[
+                "pergunta"
+            ]
+            is None
         ):
 
             raise ValueError(
-                "A resposta não possui snapshot "
-                "histórico completo."
+                "A resposta não possui o snapshot "
+                "histórico da pergunta."
+            )
+
+
+        if (
+            registro[
+                "competencia_id"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A resposta não possui o snapshot "
+                "histórico da competência."
+            )
+
+
+        if (
+            registro[
+                "competencia"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A resposta não possui o nome histórico "
+                "da competência."
+            )
+
+
+        if (
+            registro[
+                "peso_pergunta"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A resposta não possui o peso histórico "
+                "da pergunta."
+            )
+
+
+        if (
+            registro[
+                "usa_star"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A resposta não possui a configuração "
+                "histórica do método STAR."
+            )
+
+
+        # ====================================================
+        # VALIDAR TIPO HISTÓRICO
+        # ====================================================
+
+        if (
+            registro[
+                "tipo_entrevista"
+            ]
+            is None
+        ):
+
+            raise ValueError(
+                "A entrevista não possui o snapshot "
+                "histórico do tipo de entrevista."
             )
 
 
@@ -354,22 +562,10 @@ def buscar_dados_resposta(
                     "pergunta"
                 ],
 
-            "resposta":
-                registro[
-                    "texto_resposta"
-                ],
-
             "exemplo_esperado":
                 registro[
                     "exemplo_esperado"
                 ],
-
-            "usa_star":
-                bool(
-                    registro[
-                        "usa_star"
-                    ]
-                ),
 
             "competencia_id":
                 registro[
@@ -379,6 +575,38 @@ def buscar_dados_resposta(
             "competencia":
                 registro[
                     "competencia"
+                ],
+
+            "peso_pergunta":
+                registro[
+                    "peso_pergunta"
+                ],
+
+            "usa_star":
+                bool(
+                    registro[
+                        "usa_star"
+                    ]
+                ),
+
+            "ordem_pergunta":
+                registro[
+                    "ordem_pergunta"
+                ],
+
+            "resposta":
+                registro[
+                    "texto_resposta"
+                ],
+
+            "tempo_resposta":
+                registro[
+                    "tempo_resposta"
+                ],
+
+            "data_resposta":
+                registro[
+                    "data_resposta"
                 ],
 
             "tipo_entrevista_id":
@@ -394,9 +622,30 @@ def buscar_dados_resposta(
             "tipo_entrevista_descricao":
                 registro[
                     "tipo_entrevista_descricao"
+                ],
+
+            "area_tecnica_id":
+                registro[
+                    "area_tecnica_id"
+                ],
+
+            "area_tecnica":
+                registro[
+                    "area_tecnica"
+                ],
+
+            "subarea_tecnica_id":
+                registro[
+                    "subarea_tecnica_id"
+                ],
+
+            "subarea_tecnica":
+                registro[
+                    "subarea_tecnica"
                 ]
 
         }
+
 
     finally:
 
@@ -411,17 +660,33 @@ def construir_rubrica(
     criterios: list[dict]
 ) -> str:
     """
-    Constrói a descrição dos critérios.
+    Constrói a descrição textual dos critérios
+    utilizados pela entrevista.
     """
 
     linhas = []
 
+
     for criterio in criterios:
 
-        linhas.append(
-            f"- {criterio['nome']}: "
-            f"{criterio['descricao']}"
+        descricao = (
+            criterio[
+                "descricao"
+            ]
+            or
+            "Sem descrição adicional."
         )
+
+
+        linhas.append(
+
+            (
+                f"- {criterio['nome']}: "
+                f"{descricao}"
+            )
+
+        )
+
 
     return "\n".join(
         linhas
@@ -437,7 +702,13 @@ def construir_prompt(
     criterios: list[dict]
 ) -> str:
     """
-    Constrói o prompt utilizado na avaliação.
+    Constrói o conteúdo utilizado para avaliar
+    uma resposta.
+
+    Para entrevistas técnicas, são incluídos:
+
+    - área;
+    - subárea.
     """
 
     rubrica = construir_rubrica(
@@ -445,75 +716,125 @@ def construir_prompt(
     )
 
 
-    star = ""
+    # ========================================================
+    # CONTEXTO DA ENTREVISTA
+    # ========================================================
 
-    if dados["usa_star"]:
+    linhas_contexto = [
+
+        (
+            "TIPO DE ENTREVISTA:\n"
+            f"{dados['tipo_entrevista']}"
+        )
+
+    ]
+
+
+    if dados.get(
+        "area_tecnica"
+    ):
+
+        linhas_contexto.append(
+
+            (
+                "ÁREA TÉCNICA:\n"
+                f"{dados['area_tecnica']}"
+            )
+
+        )
+
+
+    if dados.get(
+        "subarea_tecnica"
+    ):
+
+        linhas_contexto.append(
+
+            (
+                "SUBÁREA TÉCNICA:\n"
+                f"{dados['subarea_tecnica']}"
+            )
+
+        )
+
+
+    contexto = "\n\n".join(
+        linhas_contexto
+    )
+
+
+    # ========================================================
+    # MÉTODO STAR
+    # ========================================================
+
+    if dados[
+        "usa_star"
+    ]:
 
         star = """
-Esta pergunta permite avaliação pelo método STAR.
+A pergunta foi cadastrada com utilização do método STAR.
 
-Quando aplicável, considere:
+Ao avaliar, considere se a resposta apresenta,
+quando aplicável:
 
-SITUAÇÃO:
-O candidato apresentou o contexto?
+- Situação;
+- Tarefa;
+- Ação;
+- Resultado.
 
-TAREFA:
-Explicou sua responsabilidade ou problema?
-
-AÇÃO:
-Explicou o que efetivamente realizou?
-
-RESULTADO:
-Apresentou o resultado ou consequência?
-
-O método STAR é complementar.
-
-Não reduza automaticamente a avaliação apenas porque
-a resposta não utiliza explicitamente os termos
-Situação, Tarefa, Ação e Resultado.
-"""
+Não penalize de maneira mecânica a ausência dos
+nomes dessas etapas. Avalie se os elementos estão
+presentes no conteúdo da resposta.
+""".strip()
 
 
-    exemplo = ""
+    else:
 
-    if dados["exemplo_esperado"]:
+        star = """
+A pergunta não exige obrigatoriamente a utilização
+do método STAR.
+""".strip()
+
+
+    # ========================================================
+    # EXEMPLO ESPERADO
+    # ========================================================
+
+    if dados.get(
+        "exemplo_esperado"
+    ):
 
         exemplo = f"""
-REFERÊNCIA INTERNA:
+REFERÊNCIA DE RESPOSTA ESPERADA:
 
 {dados["exemplo_esperado"]}
 
-A referência acima serve apenas como apoio.
+A referência serve apenas como apoio de avaliação.
 
-Não exija que o estudante utilize as mesmas palavras
-ou exatamente a mesma estrutura.
-"""
+Não exija reprodução literal e não considere
+apenas respostas idênticas à referência como corretas.
+""".strip()
+
+
+    else:
+
+        exemplo = """
+Não existe exemplo de resposta esperado cadastrado
+para esta pergunta.
+""".strip()
 
 
     return f"""
-Você é um avaliador educacional de respostas de
-entrevistas de emprego simuladas.
+Você está avaliando a resposta de um estudante em um
+simulador educacional de entrevistas profissionais.
 
-A finalidade desta avaliação é ajudar estudantes
-universitários a desenvolver habilidades para
-entrevistas profissionais.
+O objetivo é fornecer uma avaliação construtiva,
+objetiva e útil para o desenvolvimento profissional.
 
-Não realize decisões de contratação.
-
-Não determine se o candidato deveria ser contratado
-ou rejeitado.
-
-Não avalie características pessoais do estudante.
-
-Avalie exclusivamente o conteúdo textual fornecido.
+{contexto}
 
 
-TIPO DE ENTREVISTA:
-
-{dados["tipo_entrevista"]}
-
-
-COMPETÊNCIA:
+COMPETÊNCIA AVALIADA:
 
 {dados["competencia"]}
 
@@ -560,11 +881,19 @@ REGRAS IMPORTANTES:
 
 Avalie cada critério separadamente.
 
-Não invente experiências ou informações.
+Considere o tipo de entrevista informado.
+
+Quando houver área e subárea técnica, utilize esse
+contexto para interpretar adequadamente a pergunta
+e a resposta.
+
+Não invente experiências, conhecimentos ou
+informações não presentes na resposta.
 
 Não presuma informações ausentes.
 
-Fundamente a avaliação exclusivamente no texto fornecido.
+Fundamente a avaliação exclusivamente no conteúdo
+fornecido.
 
 Produza observações curtas e objetivas.
 
@@ -581,19 +910,19 @@ Produza:
 - pontos fortes;
 - pontos de melhoria;
 - feedback geral.
-
 """.strip()
 
 
 # ============================================================
-# CONSTRUIR SCHEMA
+# CONSTRUIR JSON SCHEMA
 # ============================================================
 
 def construir_schema(
     criterios: list[dict]
 ) -> dict:
     """
-    Cria dinamicamente o JSON Schema.
+    Cria dinamicamente o JSON Schema
+    da avaliação.
     """
 
     propriedades_criterios = {}
@@ -607,9 +936,11 @@ def construir_schema(
             "nome"
         ]
 
+
         nomes_criterios.append(
             nome
         )
+
 
         propriedades_criterios[
             nome
@@ -643,12 +974,16 @@ def construir_schema(
             },
 
             "required": [
+
                 "nota",
+
                 "observacao"
+
             ],
 
             "additionalProperties":
                 False
+
         }
 
 
@@ -726,28 +1061,39 @@ def construir_schema(
 
         "additionalProperties":
             False
+
     }
 
 
 # ============================================================
-# MOCK
+# GERAR RESULTADO MOCK
 # ============================================================
 
 def gerar_resultado_mock(
     criterios: list[dict]
 ) -> dict:
     """
-    Gera avaliação simulada local.
+    Gera uma avaliação simulada.
+
+    Mantém exatamente a mesma estrutura
+    utilizada pelo modo real.
     """
 
     criterios_mock = {}
 
+
     notas_mock = [
+
         8.0,
+
         7.5,
+
         8.5,
+
         7.0,
+
         9.0
+
     ]
 
 
@@ -759,10 +1105,15 @@ def gerar_resultado_mock(
             "nome"
         ]
 
+
         nota = notas_mock[
-            indice % len(
+
+            indice
+            %
+            len(
                 notas_mock
             )
+
         ]
 
 
@@ -841,7 +1192,13 @@ def chamar_openai(
     criterios: list[dict]
 ) -> dict:
     """
-    Executa análise real ou mock.
+    Executa a análise.
+
+    MOCK_OPENAI=true:
+        retorna avaliação simulada.
+
+    MOCK_OPENAI=false:
+        utiliza a OpenAI Responses API.
     """
 
     if MOCK_OPENAI:
@@ -851,6 +1208,7 @@ def chamar_openai(
             "Gerando avaliação simulada. "
             "Nenhuma chamada externa será realizada."
         )
+
 
         return gerar_resultado_mock(
             criterios
@@ -918,6 +1276,7 @@ def chamar_openai(
             texto
         )
 
+
     except json.JSONDecodeError as erro:
 
         raise RuntimeError(
@@ -938,7 +1297,7 @@ def validar_resultado(
     criterios: list[dict]
 ) -> dict:
     """
-    Valida localmente o resultado.
+    Valida localmente o resultado da análise.
     """
 
     if not isinstance(
@@ -951,7 +1310,10 @@ def validar_resultado(
         )
 
 
-    if "criterios" not in resultado:
+    if (
+        "criterios"
+        not in resultado
+    ):
 
         raise ValueError(
             "Critérios não encontrados "
@@ -962,6 +1324,16 @@ def validar_resultado(
     avaliacoes = resultado[
         "criterios"
     ]
+
+
+    if not isinstance(
+        avaliacoes,
+        dict
+    ):
+
+        raise ValueError(
+            "O campo criterios é inválido."
+        )
 
 
     for criterio in criterios:
@@ -983,27 +1355,46 @@ def validar_resultado(
         ]
 
 
+        if not isinstance(
+            dados,
+            dict
+        ):
+
+            raise ValueError(
+                f"A avaliação do critério "
+                f"{nome} é inválida."
+            )
+
+
         try:
 
             nota = float(
-                dados["nota"]
+                dados[
+                    "nota"
+                ]
             )
+
 
         except (
             KeyError,
             TypeError,
             ValueError
-        ):
+        ) as erro:
 
             raise ValueError(
                 f"Nota inválida para o critério "
                 f"{nome}."
-            )
+            ) from erro
 
 
         if (
+
             nota < NOTA_MINIMA
-            or nota > NOTA_MAXIMA
+
+            or
+
+            nota > NOTA_MAXIMA
+
         ):
 
             raise ValueError(
@@ -1017,10 +1408,13 @@ def validar_resultado(
         ] = nota
 
 
+        observacao = dados.get(
+            "observacao"
+        )
+
+
         if not isinstance(
-            dados.get(
-                "observacao"
-            ),
+            observacao,
             str
         ):
 
@@ -1031,30 +1425,39 @@ def validar_resultado(
 
 
     for campo in (
+
         "pontos_fortes",
+
         "pontos_melhoria"
+
     ):
 
+        valor = resultado.get(
+            campo
+        )
+
+
         if not isinstance(
-            resultado.get(
-                campo
-            ),
+            valor,
             list
         ):
 
             raise ValueError(
-                f"O campo {campo} deve ser uma lista."
+                f"O campo {campo} deve "
+                "ser uma lista."
             )
 
 
         if not all(
+
             isinstance(
                 item,
                 str
             )
-            for item in resultado[
-                campo
-            ]
+
+            for item
+            in valor
+
         ):
 
             raise ValueError(
@@ -1064,10 +1467,13 @@ def validar_resultado(
 
 
     if not isinstance(
+
         resultado.get(
             "feedback"
         ),
+
         str
+
     ):
 
         raise ValueError(
@@ -1087,14 +1493,18 @@ def calcular_pontuacao_resposta(
     criterios: list[dict]
 ) -> float:
     """
-    Calcula a pontuação da resposta.
+    Calcula a pontuação ponderada da resposta.
     """
 
     soma_pesos = sum(
+
         criterio[
             "peso"
         ]
-        for criterio in criterios
+
+        for criterio
+        in criterios
+
     )
 
 
@@ -1130,35 +1540,18 @@ def calcular_pontuacao_resposta(
 
         pontuacao += (
             nota
-            * peso
+            *
+            peso
         )
 
 
-    pontuacao /= (
-        soma_pesos
-    )
+    pontuacao /= soma_pesos
 
 
     return round(
         pontuacao,
         2
     )
-
-
-# ============================================================
-# MODELO UTILIZADO
-# ============================================================
-
-def obter_nome_modelo_avaliacao() -> str:
-    """
-    Retorna o identificador do modelo utilizado.
-    """
-
-    if MOCK_OPENAI:
-
-        return "MOCK_OPENAI"
-
-    return MODELO_OPENAI
 
 
 # ============================================================
@@ -1171,20 +1564,28 @@ def salvar_avaliacao(
     criterios: list[dict]
 ) -> int:
     """
-    Armazena a avaliação de uma resposta.
+    Armazena uma avaliação.
 
-    Os snapshots dos critérios são preenchidos
-    automaticamente pelos triggers do banco.
+    Também congela, para cada critério:
 
-    A função grava uma resposta por vez.
-
-    A consistência da entrevista completa é
-    responsabilidade de analisar_entrevista().
+    - nome;
+    - descrição;
+    - peso;
+    - ordem.
     """
 
+    _validar_id(
+        resposta_id,
+        "ID da resposta"
+    )
+
+
     pontuacao = calcular_pontuacao_resposta(
+
         resultado,
+
         criterios
+
     )
 
 
@@ -1197,11 +1598,18 @@ def salvar_avaliacao(
 
         cursor.execute(
             """
+            BEGIN IMMEDIATE
+            """
+        )
+
+
+        cursor.execute(
+            """
             SELECT id
 
-            FROM avaliacoes
+            FROM respostas
 
-            WHERE resposta_id = ?
+            WHERE id = ?
             """,
             (
                 resposta_id,
@@ -1209,7 +1617,33 @@ def salvar_avaliacao(
         )
 
 
-        if cursor.fetchone() is not None:
+        if cursor.fetchone() is None:
+
+            raise ValueError(
+                "Resposta não encontrada."
+            )
+
+
+        cursor.execute(
+            """
+            SELECT id
+
+            FROM avaliacoes
+
+            WHERE resposta_id = ?
+
+            LIMIT 1
+            """,
+            (
+                resposta_id,
+            )
+        )
+
+
+        if (
+            cursor.fetchone()
+            is not None
+        ):
 
             raise ValueError(
                 "Esta resposta já possui avaliação."
@@ -1261,22 +1695,36 @@ def salvar_avaliacao(
 
             )
 
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?
+            )
             """,
             (
+
                 resposta_id,
+
                 pontuacao,
+
                 pontos_fortes,
+
                 pontos_melhoria,
+
                 resultado[
                     "feedback"
                 ],
+
                 modelo_utilizado
+
             )
         )
 
 
-        avaliacao_id = (
+        avaliacao_id = int(
             cursor.lastrowid
         )
 
@@ -1303,23 +1751,61 @@ def salvar_avaliacao(
 
                     nota,
 
-                    observacao
+                    observacao,
+
+                    peso_aplicado,
+
+                    criterio_nome_aplicado,
+
+                    criterio_descricao_aplicada,
+
+                    criterio_ordem_aplicada
 
                 )
 
-                VALUES (?, ?, ?, ?)
+                VALUES (
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?
+                )
                 """,
                 (
+
                     avaliacao_id,
+
                     criterio[
                         "id"
                     ],
+
                     dados[
                         "nota"
                     ],
+
                     dados[
                         "observacao"
+                    ],
+
+                    criterio[
+                        "peso"
+                    ],
+
+                    criterio[
+                        "nome"
+                    ],
+
+                    criterio[
+                        "descricao"
+                    ],
+
+                    criterio[
+                        "ordem"
                     ]
+
                 )
             )
 
@@ -1328,6 +1814,29 @@ def salvar_avaliacao(
 
 
         return avaliacao_id
+
+
+    except sqlite3.IntegrityError as erro:
+
+        conexao.rollback()
+
+
+        mensagem = str(
+            erro
+        ).lower()
+
+
+        if (
+            "unique constraint failed"
+            in mensagem
+        ):
+
+            raise ValueError(
+                "Esta resposta já possui avaliação."
+            ) from erro
+
+
+        raise
 
 
     except (
@@ -1346,14 +1855,27 @@ def salvar_avaliacao(
 
 
 # ============================================================
-# ANALISAR RESPOSTA
+# ANALISAR UMA RESPOSTA
 # ============================================================
 
 def analisar_resposta(
-    resposta_id: int
+    resposta_id: int,
+    criterios: list[dict] | None = None
 ) -> int:
     """
-    Executa o fluxo de análise de uma resposta.
+    Executa o fluxo completo de avaliação
+    de uma resposta.
+
+    Quando criterios for informado, utiliza
+    exatamente o conjunto recebido.
+
+    Isso é utilizado por analisar_entrevista()
+    para garantir que todas as respostas da mesma
+    entrevista sejam analisadas com o mesmo conjunto
+    de critérios.
+
+    Quando chamada isoladamente, a função ainda pode
+    buscar os critérios ativos automaticamente.
     """
 
     dados = buscar_dados_resposta(
@@ -1368,9 +1890,11 @@ def analisar_resposta(
         )
 
 
-    criterios = (
-        buscar_criterios_ativos()
-    )
+    if criterios is None:
+
+        criterios = (
+            buscar_criterios_ativos()
+        )
 
 
     if not criterios:
@@ -1381,27 +1905,40 @@ def analisar_resposta(
 
 
     prompt = construir_prompt(
+
         dados,
+
         criterios
+
     )
 
 
     resultado = chamar_openai(
+
         prompt,
+
         criterios
+
     )
 
 
     resultado = validar_resultado(
+
         resultado,
+
         criterios
+
     )
 
 
     return salvar_avaliacao(
+
         resposta_id,
+
         resultado,
+
         criterios
+
     )
 
 
@@ -1413,15 +1950,16 @@ def buscar_respostas_entrevista(
     entrevista_id: int
 ) -> list[int]:
     """
-    Retorna os IDs das respostas da entrevista
-    utilizando a ordem histórica.
+    Retorna IDs das respostas da entrevista.
+
+    A ordenação utiliza o snapshot histórico
+    da ordem da pergunta.
     """
 
-    if entrevista_id <= 0:
-
-        raise ValueError(
-            "O ID da entrevista é inválido."
-        )
+    _validar_id(
+        entrevista_id,
+        "ID da entrevista"
+    )
 
 
     conexao = conectar_banco()
@@ -1433,11 +1971,13 @@ def buscar_respostas_entrevista(
 
         cursor.execute(
             """
-            SELECT r.id
+            SELECT
+                r.id
 
             FROM respostas r
 
-            WHERE r.entrevista_id = ?
+            WHERE
+                r.entrevista_id = ?
 
             ORDER BY
 
@@ -1472,84 +2012,22 @@ def buscar_respostas_entrevista(
 
 
 # ============================================================
-# REMOVER AVALIAÇÕES DA ENTREVISTA
-# ============================================================
-
-def _limpar_avaliacoes_entrevista(
-    entrevista_id: int
-) -> None:
-    """
-    Remove todas as avaliações pertencentes
-    às respostas de uma entrevista.
-
-    Os registros de avaliacao_criterios são
-    removidos automaticamente através de
-    ON DELETE CASCADE.
-
-    Esta função somente deve ser utilizada pela
-    requisição que adquiriu o direito de processar
-    a entrevista.
-    """
-
-    if entrevista_id <= 0:
-
-        raise ValueError(
-            "O ID da entrevista é inválido."
-        )
-
-
-    conexao = conectar_banco()
-
-    cursor = conexao.cursor()
-
-
-    try:
-
-        cursor.execute(
-            """
-            DELETE FROM avaliacoes
-
-            WHERE resposta_id IN (
-
-                SELECT id
-
-                FROM respostas
-
-                WHERE entrevista_id = ?
-            )
-            """,
-            (
-                entrevista_id,
-            )
-        )
-
-
-        conexao.commit()
-
-
-    except sqlite3.Error:
-
-        conexao.rollback()
-
-        raise
-
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
 # ALTERAR STATUS
 # ============================================================
 
 def _alterar_status(
     entrevista_id: int,
-    status: str
+    novo_status: str
 ) -> None:
     """
     Altera o status da entrevista.
     """
+
+    _validar_id(
+        entrevista_id,
+        "ID da entrevista"
+    )
+
 
     conexao = conectar_banco()
 
@@ -1567,16 +2045,26 @@ def _alterar_status(
             WHERE id = ?
             """,
             (
-                status,
+                novo_status,
                 entrevista_id
             )
         )
 
 
+        if cursor.rowcount == 0:
+
+            raise ValueError(
+                "Entrevista não encontrada."
+            )
+
+
         conexao.commit()
 
 
-    except sqlite3.Error:
+    except (
+        sqlite3.Error,
+        ValueError
+    ):
 
         conexao.rollback()
 
@@ -1594,39 +2082,27 @@ def _alterar_status(
 
 def _adquirir_entrevista_para_analise(
     entrevista_id: int
-) -> str:
+) -> None:
     """
-    Adquire atomicamente uma entrevista para análise.
+    Reserva atomicamente uma entrevista
+    para análise.
 
-    Esta é a principal proteção contra concorrência.
+    Isso impede que duas requisições analisem
+    simultaneamente a mesma entrevista.
 
-    O SQLite executa BEGIN IMMEDIATE, adquirindo
-    imediatamente o bloqueio de escrita necessário.
+    Status aceitos:
 
-    Dentro da mesma transação:
+    - finalizada;
+    - erro_analise.
 
-    1. a entrevista é localizada;
-    2. seu status é validado;
-    3. o status é alterado para em_analise;
-    4. eventuais avaliações parciais de uma tentativa
-       anterior são removidas;
-    5. a transação é confirmada.
-
-    Enquanto esta pequena transação estiver ativa,
-    outra requisição não consegue executar outra
-    alteração concorrente no banco.
-
-    Depois do commit, uma segunda requisição encontrará
-    a entrevista com status em_analise e será recusada.
-
-    Retorna o status que existia antes da aquisição.
+    Em caso de nova tentativa após erro,
+    avaliações parciais anteriores são removidas.
     """
 
-    if entrevista_id <= 0:
-
-        raise ValueError(
-            "O ID da entrevista é inválido."
-        )
+    _validar_id(
+        entrevista_id,
+        "ID da entrevista"
+    )
 
 
     conexao = conectar_banco()
@@ -1636,23 +2112,12 @@ def _adquirir_entrevista_para_analise(
 
     try:
 
-        # ----------------------------------------------------
-        # BEGIN IMMEDIATE
-        #
-        # Impede que duas requisições façam a transição
-        # de estado simultaneamente.
-        # ----------------------------------------------------
-
         cursor.execute(
             """
             BEGIN IMMEDIATE
             """
         )
 
-
-        # ----------------------------------------------------
-        # BUSCAR STATUS ATUAL
-        # ----------------------------------------------------
 
         cursor.execute(
             """
@@ -1680,34 +2145,14 @@ def _adquirir_entrevista_para_analise(
             )
 
 
-        status_anterior = (
-            entrevista[
-                "status"
-            ]
-        )
+        if entrevista[
+            "status"
+        ] not in (
 
-
-        # ----------------------------------------------------
-        # VALIDAR ESTADO
-        # ----------------------------------------------------
-
-        if status_anterior == "em_analise":
-
-            raise ValueError(
-                "A entrevista já está em análise."
-            )
-
-
-        if status_anterior == "avaliada":
-
-            raise ValueError(
-                "A entrevista já foi avaliada."
-            )
-
-
-        if status_anterior not in (
             "finalizada",
+
             "erro_analise"
+
         ):
 
             raise ValueError(
@@ -1716,12 +2161,46 @@ def _adquirir_entrevista_para_analise(
             )
 
 
-        # ----------------------------------------------------
-        # TRANSIÇÃO ATÔMICA
-        #
-        # Mesmo após a leitura acima, utilizamos novamente
-        # o status na cláusula WHERE.
-        # ----------------------------------------------------
+        if (
+            entrevista[
+                "status"
+            ]
+            == "erro_analise"
+        ):
+
+            cursor.execute(
+                """
+                DELETE FROM avaliacoes
+
+                WHERE resposta_id IN (
+
+                    SELECT id
+
+                    FROM respostas
+
+                    WHERE entrevista_id = ?
+
+                )
+                """,
+                (
+                    entrevista_id,
+                )
+            )
+
+
+            cursor.execute(
+                """
+                UPDATE entrevistas
+
+                SET pontuacao_final = NULL
+
+                WHERE id = ?
+                """,
+                (
+                    entrevista_id,
+                )
+            )
+
 
         cursor.execute(
             """
@@ -1729,12 +2208,14 @@ def _adquirir_entrevista_para_analise(
 
             SET status = 'em_analise'
 
-            WHERE id = ?
+            WHERE
+                id = ?
 
-              AND status IN (
+              AND
+                status IN (
                     'finalizada',
                     'erro_analise'
-              )
+                )
             """,
             (
                 entrevista_id,
@@ -1745,16 +2226,59 @@ def _adquirir_entrevista_para_analise(
         if cursor.rowcount != 1:
 
             raise ValueError(
-                "A entrevista já está sendo processada."
+                "A entrevista já está sendo analisada "
+                "ou não está disponível para análise."
             )
 
 
-        # ----------------------------------------------------
-        # LIMPEZA DE TENTATIVA ANTERIOR
-        #
-        # Somente a requisição que conseguiu adquirir
-        # a entrevista executa esta limpeza.
-        # ----------------------------------------------------
+        conexao.commit()
+
+
+    except (
+        sqlite3.Error,
+        ValueError
+    ):
+
+        conexao.rollback()
+
+        raise
+
+
+    finally:
+
+        conexao.close()
+
+
+# ============================================================
+# LIMPAR ANÁLISE PARCIAL
+# ============================================================
+
+def _limpar_analise_parcial(
+    entrevista_id: int
+) -> None:
+    """
+    Remove avaliações geradas parcialmente
+    quando a análise da entrevista falha.
+
+    Ao final:
+
+    status = erro_analise
+    pontuacao_final = NULL
+    """
+
+    conexao = conectar_banco()
+
+    cursor = conexao.cursor()
+
+
+    try:
+
+        cursor.execute(
+            """
+            BEGIN IMMEDIATE
+            """
+        )
+
 
         cursor.execute(
             """
@@ -1767,6 +2291,7 @@ def _adquirir_entrevista_para_analise(
                 FROM respostas
 
                 WHERE entrevista_id = ?
+
             )
             """,
             (
@@ -1775,20 +2300,28 @@ def _adquirir_entrevista_para_analise(
         )
 
 
-        # ----------------------------------------------------
-        # COMMIT DA AQUISIÇÃO
-        # ----------------------------------------------------
+        cursor.execute(
+            """
+            UPDATE entrevistas
+
+            SET
+
+                status = 'erro_analise',
+
+                pontuacao_final = NULL
+
+            WHERE id = ?
+            """,
+            (
+                entrevista_id,
+            )
+        )
+
 
         conexao.commit()
 
 
-        return status_anterior
-
-
-    except (
-        sqlite3.Error,
-        ValueError
-    ):
+    except sqlite3.Error:
 
         conexao.rollback()
 
@@ -1808,48 +2341,37 @@ def analisar_entrevista(
     entrevista_id: int
 ) -> dict:
     """
-    Analisa todas as respostas de uma entrevista.
+    Analisa todas as respostas pertencentes
+    a uma entrevista finalizada.
 
-    O primeiro passo é adquirir atomicamente
-    o direito de processar a entrevista.
+    Fluxo:
 
-    Somente depois da aquisição são realizadas
-    as chamadas de Inteligência Artificial.
+    1. reserva atomicamente a entrevista;
+    2. altera status para em_analise;
+    3. recupera os critérios ativos UMA VEZ;
+    4. congela esse conjunto em memória;
+    5. recupera as respostas históricas;
+    6. analisa todas as respostas utilizando
+       exatamente os mesmos critérios;
+    7. salva avaliações e snapshots dos critérios;
+    8. executa o Motor de Pontuação;
+    9. finaliza a entrevista como avaliada.
 
-    Isso impede duas requisições concorrentes de
-    processarem a mesma entrevista ao mesmo tempo.
+    Em caso de erro:
 
-    Se ocorrer uma falha após a aquisição:
-
-    - todas as avaliações desta tentativa são removidas;
-    - notas de critérios são removidas por cascade;
-    - status recebe erro_analise;
-    - uma nova tentativa poderá ser executada.
-
-    Importante:
-
-    Caso _adquirir_entrevista_para_analise()
-    rejeite a requisição, nenhuma limpeza é realizada.
-
-    Isso impede que uma segunda requisição concorrente
-    apague o trabalho da primeira.
+    - avaliações parciais são removidas;
+    - pontuação final é limpa;
+    - status passa para erro_analise.
     """
 
-    if entrevista_id <= 0:
-
-        raise ValueError(
-            "O ID da entrevista é inválido."
-        )
+    _validar_id(
+        entrevista_id,
+        "ID da entrevista"
+    )
 
 
     # ========================================================
-    # AQUISIÇÃO ATÔMICA
-    #
-    # Se outra requisição já estiver processando,
-    # a exceção ocorre aqui.
-    #
-    # Neste caso NÃO entramos no bloco de rollback
-    # compensatório abaixo.
+    # RESERVAR ENTREVISTA
     # ========================================================
 
     _adquirir_entrevista_para_analise(
@@ -1857,21 +2379,30 @@ def analisar_entrevista(
     )
 
 
-    # ========================================================
-    # A PARTIR DESTE PONTO ESTA REQUISIÇÃO É A DONA
-    # DO PROCESSAMENTO DA ENTREVISTA.
-    # ========================================================
-
     try:
 
-        # ----------------------------------------------------
-        # BUSCAR RESPOSTAS
-        # ----------------------------------------------------
+        # ====================================================
+        # CONGELAR CRITÉRIOS NA MEMÓRIA
+        # ====================================================
 
-        respostas = (
-            buscar_respostas_entrevista(
-                entrevista_id
+        criterios = (
+            buscar_criterios_ativos()
+        )
+
+
+        if not criterios:
+
+            raise ValueError(
+                "Nenhum critério ativo encontrado."
             )
+
+
+        # ====================================================
+        # RESPOSTAS
+        # ====================================================
+
+        respostas = buscar_respostas_entrevista(
+            entrevista_id
         )
 
 
@@ -1882,19 +2413,21 @@ def analisar_entrevista(
             )
 
 
-        # ----------------------------------------------------
-        # ANALISAR RESPOSTAS
-        # ----------------------------------------------------
-
         avaliacoes = []
 
 
+        # ====================================================
+        # ANALISAR TODAS COM O MESMO CONJUNTO
+        # ====================================================
+
         for resposta_id in respostas:
 
-            avaliacao_id = (
-                analisar_resposta(
-                    resposta_id
-                )
+            avaliacao_id = analisar_resposta(
+
+                resposta_id,
+
+                criterios=criterios
+
             )
 
 
@@ -1903,20 +2436,18 @@ def analisar_entrevista(
             )
 
 
-        # ----------------------------------------------------
-        # PROCESSAR RESULTADO FINAL
-        # ----------------------------------------------------
+        # ====================================================
+        # MOTOR DE PONTUAÇÃO
+        # ====================================================
 
-        resultado_final = (
-            processar_avaliacao(
-                entrevista_id
-            )
+        resultado_final = processar_avaliacao(
+            entrevista_id
         )
 
 
-        # ----------------------------------------------------
-        # SUCESSO
-        # ----------------------------------------------------
+        # ====================================================
+        # RETORNO
+        # ====================================================
 
         return {
 
@@ -1933,6 +2464,11 @@ def analisar_entrevista(
             "modelo":
                 obter_nome_modelo_avaliacao(),
 
+            "quantidade_criterios_aplicados":
+                len(
+                    criterios
+                ),
+
             "avaliacoes":
                 avaliacoes,
 
@@ -1944,28 +2480,9 @@ def analisar_entrevista(
 
     except Exception:
 
-        # ----------------------------------------------------
-        # ROLLBACK COMPENSATÓRIO
-        #
-        # Somente esta requisição chegou até aqui após
-        # adquirir a entrevista.
-        #
-        # Por isso ela pode remover seus próprios
-        # resultados parciais com segurança.
-        # ----------------------------------------------------
-
-        try:
-
-            _limpar_avaliacoes_entrevista(
-                entrevista_id
-            )
-
-        finally:
-
-            _alterar_status(
-                entrevista_id,
-                "erro_analise"
-            )
+        _limpar_analise_parcial(
+            entrevista_id
+        )
 
 
         raise

@@ -4,8 +4,6 @@ routers/perguntas.py
 Endpoints relacionados ao banco de perguntas
 do Simulador de Entrevistas.
 
-Versão: 0.3
-
 Responsabilidades:
 
 - listar perguntas;
@@ -13,32 +11,46 @@ Responsabilidades:
 - cadastrar perguntas;
 - atualizar perguntas;
 - ativar perguntas;
-- inativar perguntas.
+- inativar perguntas;
+- filtrar perguntas por tipo;
+- filtrar perguntas por competência;
+- filtrar perguntas por área;
+- filtrar perguntas por subárea.
 
-Operações de manutenção são exclusivas
-do administrador.
+Perguntas técnicas possuem obrigatoriamente:
 
-Os erros de validação provenientes da camada
-de serviço são convertidos para HTTP 400.
+- área técnica;
+- subárea técnica.
+
+Operações administrativas são permitidas
+somente para administradores.
+
+Usuários estudantes somente recebem perguntas
+que estejam efetivamente disponíveis para uso.
 """
+
+from typing import Optional
+
 
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     status
+)
+
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field
 )
 
 
 from ..models import (
     Usuario,
     Pergunta
-)
-
-
-from ..schemas import (
-    PerguntaCriar,
-    PerguntaAtualizar
 )
 
 
@@ -51,6 +63,7 @@ from ..security import (
 from ..perguntas import (
     cadastrar_pergunta,
     buscar_pergunta,
+    buscar_pergunta_ativa,
     listar_perguntas,
     editar_pergunta,
     desativar_pergunta,
@@ -59,12 +72,153 @@ from ..perguntas import (
 
 
 # ============================================================
+# SCHEMA - CRIAR PERGUNTA
+# ============================================================
+
+class PerguntaCriar(BaseModel):
+    """
+    Contrato utilizado para cadastrar perguntas.
+
+    Para tipos que utilizam área técnica:
+
+    area_tecnica_id
+    e
+    subarea_tecnica_id
+
+    serão obrigatórios pela regra de negócio
+    implementada em perguntas.py.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+
+    tipo_entrevista_id: int = Field(
+        gt=0
+    )
+
+
+    competencia_id: int = Field(
+        gt=0
+    )
+
+
+    texto: str = Field(
+        min_length=3,
+        max_length=4000
+    )
+
+
+    exemplo_esperado: Optional[str] = Field(
+        default=None,
+        max_length=8000
+    )
+
+
+    ordem: Optional[int] = Field(
+        default=None,
+        gt=0
+    )
+
+
+    peso: float = Field(
+        default=1.0,
+        gt=0
+    )
+
+
+    usa_star: bool = False
+
+
+    area_tecnica_id: Optional[int] = Field(
+        default=None,
+        gt=0
+    )
+
+
+    subarea_tecnica_id: Optional[int] = Field(
+        default=None,
+        gt=0
+    )
+
+
+# ============================================================
+# SCHEMA - ATUALIZAR PERGUNTA
+# ============================================================
+
+class PerguntaAtualizar(BaseModel):
+    """
+    Contrato utilizado para atualização
+    de uma pergunta.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
+
+
+    tipo_entrevista_id: int = Field(
+        gt=0
+    )
+
+
+    competencia_id: int = Field(
+        gt=0
+    )
+
+
+    texto: str = Field(
+        min_length=3,
+        max_length=4000
+    )
+
+
+    exemplo_esperado: Optional[str] = Field(
+        default=None,
+        max_length=8000
+    )
+
+
+    ordem: Optional[int] = Field(
+        default=None,
+        gt=0
+    )
+
+
+    peso: float = Field(
+        default=1.0,
+        gt=0
+    )
+
+
+    usa_star: bool = False
+
+
+    area_tecnica_id: Optional[int] = Field(
+        default=None,
+        gt=0
+    )
+
+
+    subarea_tecnica_id: Optional[int] = Field(
+        default=None,
+        gt=0
+    )
+
+
+# ============================================================
 # ROUTER
 # ============================================================
 
 router = APIRouter(
+
     prefix="/perguntas",
-    tags=["Perguntas"]
+
+    tags=[
+        "Perguntas"
+    ]
+
 )
 
 
@@ -72,20 +226,100 @@ router = APIRouter(
 # LISTAR PERGUNTAS
 # ============================================================
 
-@router.get("")
+@router.get(
+    ""
+)
 def listar(
+    somente_ativas: bool = Query(
+        default=True
+    ),
+    tipo_entrevista_id: Optional[int] = Query(
+        default=None,
+        gt=0
+    ),
+    competencia_id: Optional[int] = Query(
+        default=None,
+        gt=0
+    ),
+    area_tecnica_id: Optional[int] = Query(
+        default=None,
+        gt=0
+    ),
+    subarea_tecnica_id: Optional[int] = Query(
+        default=None,
+        gt=0
+    ),
     usuario: Usuario = Depends(
         obter_usuario_atual
     )
 ):
     """
-    Lista as perguntas disponíveis.
+    Lista perguntas cadastradas.
 
-    Usuários autenticados podem consultar
-    as perguntas cadastradas.
+    Administradores podem consultar registros
+    ativos e inativos.
+
+    Estudantes recebem somente perguntas
+    disponíveis para utilização.
+
+    Filtros disponíveis:
+
+    - tipo_entrevista_id;
+    - competencia_id;
+    - area_tecnica_id;
+    - subarea_tecnica_id;
+    - somente_ativas.
     """
 
-    return listar_perguntas()
+    # --------------------------------------------------------
+    # ESTUDANTE NÃO PODE CONSULTAR INATIVAS
+    # --------------------------------------------------------
+
+    if usuario.perfil != "administrador":
+
+        somente_ativas = True
+
+
+    try:
+
+        return listar_perguntas(
+
+            somente_ativas=(
+                somente_ativas
+            ),
+
+            tipo_entrevista_id=(
+                tipo_entrevista_id
+            ),
+
+            competencia_id=(
+                competencia_id
+            ),
+
+            area_tecnica_id=(
+                area_tecnica_id
+            ),
+
+            subarea_tecnica_id=(
+                subarea_tecnica_id
+            )
+
+        )
+
+
+    except ValueError as erro:
+
+        raise HTTPException(
+
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+
+            detail=str(
+                erro
+            )
+
+        )
 
 
 # ============================================================
@@ -103,36 +337,60 @@ def consultar(
 ):
     """
     Consulta uma pergunta pelo ID.
+
+    Administradores podem consultar inclusive
+    perguntas inativas.
+
+    Estudantes somente podem consultar perguntas
+    efetivamente disponíveis para utilização.
     """
 
     try:
 
-        pergunta = buscar_pergunta(
-            pergunta_id
-        )
+        if usuario.perfil == "administrador":
+
+            pergunta = buscar_pergunta(
+                pergunta_id
+            )
+
+
+        else:
+
+            pergunta = buscar_pergunta_ativa(
+                pergunta_id
+            )
 
 
         if pergunta is None:
 
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Pergunta não encontrada."
+
+                status_code=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+
+                detail=(
+                    "Pergunta não encontrada."
+                )
+
             )
 
 
         return pergunta
 
 
-    except HTTPException:
-
-        raise
-
-
     except ValueError as erro:
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
+
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+
+            detail=str(
+                erro
+            )
+
         )
 
 
@@ -153,8 +411,17 @@ def cadastrar(
     """
     Cadastra uma nova pergunta.
 
-    Operação permitida somente para
-    administradores.
+    Regras:
+
+    Para tipo sem área técnica:
+
+        area_tecnica_id = null
+        subarea_tecnica_id = null
+
+    Para tipo com área técnica:
+
+        area_tecnica_id = obrigatório
+        subarea_tecnica_id = obrigatório
     """
 
     try:
@@ -169,19 +436,35 @@ def cadastrar(
                 dados.competencia_id
             ),
 
-            texto=dados.texto,
+            texto=(
+                dados.texto
+            ),
 
             exemplo_esperado=(
                 dados.exemplo_esperado
             ),
 
-            ordem=dados.ordem,
+            ordem=(
+                dados.ordem
+            ),
 
             ativa=True,
 
-            peso=dados.peso,
+            peso=(
+                dados.peso
+            ),
 
-            usa_star=dados.usa_star
+            usa_star=(
+                dados.usa_star
+            ),
+
+            area_tecnica_id=(
+                dados.area_tecnica_id
+            ),
+
+            subarea_tecnica_id=(
+                dados.subarea_tecnica_id
+            )
 
         )
 
@@ -196,14 +479,37 @@ def cadastrar(
         )
 
 
+        if pergunta_criada is None:
+
+            raise HTTPException(
+
+                status_code=(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR
+                ),
+
+                detail=(
+                    "A pergunta foi cadastrada, "
+                    "mas não pôde ser recuperada."
+                )
+
+            )
+
+
         return pergunta_criada
 
 
     except ValueError as erro:
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
+
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+
+            detail=str(
+                erro
+            )
+
         )
 
 
@@ -224,8 +530,15 @@ def atualizar(
     """
     Atualiza uma pergunta existente.
 
-    Operação permitida somente para
-    administradores.
+    O status ativo/inativo atual é preservado.
+
+    Caso a pergunta passe de um tipo não técnico
+    para técnico, área e subárea tornam-se
+    obrigatórias.
+
+    Caso passe de um tipo técnico para um tipo
+    que não utiliza área, área e subárea devem
+    ser enviadas como null.
     """
 
     try:
@@ -238,14 +551,23 @@ def atualizar(
         if pergunta_atual is None:
 
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Pergunta não encontrada."
+
+                status_code=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+
+                detail=(
+                    "Pergunta não encontrada."
+                )
+
             )
 
 
         pergunta = Pergunta(
 
-            id=pergunta_id,
+            id=(
+                pergunta_id
+            ),
 
             tipo_entrevista_id=(
                 dados.tipo_entrevista_id
@@ -255,22 +577,50 @@ def atualizar(
                 dados.competencia_id
             ),
 
-            texto=dados.texto,
+            texto=(
+                dados.texto
+            ),
 
             exemplo_esperado=(
                 dados.exemplo_esperado
             ),
 
-            ordem=dados.ordem,
+            ordem=(
+                dados.ordem
+            ),
 
-            # Preserva o status atual.
-            ativa=pergunta_atual.ativa,
+            # ------------------------------------------------
+            # PRESERVAR STATUS
+            # ------------------------------------------------
 
-            peso=dados.peso,
+            ativa=(
+                pergunta_atual.ativa
+            ),
 
-            usa_star=dados.usa_star,
+            peso=(
+                dados.peso
+            ),
 
-            # Preserva a data original.
+            usa_star=(
+                dados.usa_star
+            ),
+
+            # ------------------------------------------------
+            # ÁREA / SUBÁREA
+            # ------------------------------------------------
+
+            area_tecnica_id=(
+                dados.area_tecnica_id
+            ),
+
+            subarea_tecnica_id=(
+                dados.subarea_tecnica_id
+            ),
+
+            # ------------------------------------------------
+            # PRESERVAR DATA
+            # ------------------------------------------------
+
             data_criacao=(
                 pergunta_atual.data_criacao
             )
@@ -279,16 +629,26 @@ def atualizar(
 
 
         alterada = editar_pergunta(
+
             pergunta_id,
+
             pergunta
+
         )
 
 
         if not alterada:
 
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Pergunta não encontrada."
+
+                status_code=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+
+                detail=(
+                    "Pergunta não encontrada."
+                )
+
             )
 
 
@@ -297,16 +657,18 @@ def atualizar(
         )
 
 
-    except HTTPException:
-
-        raise
-
-
     except ValueError as erro:
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
+
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+
+            detail=str(
+                erro
+            )
+
         )
 
 
@@ -326,7 +688,7 @@ def inativar(
     """
     Inativa uma pergunta.
 
-    A pergunta não é excluída do banco,
+    O registro não é excluído,
     preservando o histórico.
     """
 
@@ -340,8 +702,15 @@ def inativar(
         if pergunta is None:
 
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Pergunta não encontrada."
+
+                status_code=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+
+                detail=(
+                    "Pergunta não encontrada."
+                )
+
             )
 
 
@@ -353,30 +722,36 @@ def inativar(
         if not alterada:
 
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+
+                status_code=(
+                    status.HTTP_400_BAD_REQUEST
+                ),
+
                 detail=(
                     "Não foi possível inativar "
                     "a pergunta."
                 )
+
             )
 
 
-        return {
-            "mensagem":
-                "Pergunta inativada com sucesso."
-        }
-
-
-    except HTTPException:
-
-        raise
+        return buscar_pergunta(
+            pergunta_id
+        )
 
 
     except ValueError as erro:
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
+
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+
+            detail=str(
+                erro
+            )
+
         )
 
 
@@ -394,15 +769,15 @@ def ativar(
     )
 ):
     """
-    Reativa uma pergunta anteriormente inativada.
+    Reativa uma pergunta.
 
-    O serviço também verifica se:
+    Antes da reativação o backend verifica:
 
-    - o tipo de entrevista está ativo;
-    - a competência está ativa.
-
-    Caso alguma regra não seja atendida,
-    o ValueError é convertido para HTTP 400.
+    - tipo de entrevista ativo;
+    - competência ativa;
+    - área ativa, quando aplicável;
+    - subárea ativa, quando aplicável;
+    - vínculo correto entre área e subárea.
     """
 
     try:
@@ -415,8 +790,15 @@ def ativar(
         if pergunta is None:
 
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Pergunta não encontrada."
+
+                status_code=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+
+                detail=(
+                    "Pergunta não encontrada."
+                )
+
             )
 
 
@@ -428,36 +810,34 @@ def ativar(
         if not alterada:
 
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+
+                status_code=(
+                    status.HTTP_400_BAD_REQUEST
+                ),
+
                 detail=(
                     "Não foi possível ativar "
                     "a pergunta."
                 )
+
             )
 
 
-        pergunta_ativada = buscar_pergunta(
+        return buscar_pergunta(
             pergunta_id
         )
-
-
-        return {
-            "mensagem":
-                "Pergunta ativada com sucesso.",
-
-            "pergunta":
-                pergunta_ativada
-        }
-
-
-    except HTTPException:
-
-        raise
 
 
     except ValueError as erro:
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
+
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+
+            detail=str(
+                erro
+            )
+
         )
