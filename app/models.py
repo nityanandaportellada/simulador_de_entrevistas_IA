@@ -1,30 +1,6 @@
-"""
-models.py
-
-Modelos de dados do Simulador de Entrevistas.
-
-Versão: 0.6
-
-Os modelos representam as principais entidades utilizadas
-pela aplicação.
-
-O acesso ao SQLite continua sendo realizado pelo módulo
-database.py utilizando sqlite3.
-
-Nesta versão também são representados:
-
-- áreas técnicas;
-- subáreas técnicas;
-- seleção de área/subárea em perguntas técnicas;
-- seleção de área/subárea em entrevistas técnicas;
-- snapshots históricos;
-- conjunto de perguntas congelado por entrevista.
-"""
+"""Modelos de dados usados pelo Simulador de Entrevistas."""
 
 from dataclasses import dataclass
-
-from typing import Optional
-
 
 # ============================================================
 # USUÁRIO
@@ -32,30 +8,16 @@ from typing import Optional
 
 @dataclass
 class Usuario:
-    """
-    Representa um usuário do sistema.
+    """Guarda os dados de um usuário do sistema."""
 
-    Perfis permitidos:
-
-    - estudante
-    - administrador
-    """
-
-    id: Optional[int] = None
-
+    id: int | None = None
     nome: str = ""
-
     email: str = ""
-
     senha_hash: str = ""
-
     perfil: str = "estudante"
-
     ativo: bool = True
-
-    data_criacao: Optional[str] = None
-
-    ultimo_acesso: Optional[str] = None
+    data_criacao: str | None = None
+    ultimo_acesso: str | None = None
 
 
 # ============================================================
@@ -64,29 +26,13 @@ class Usuario:
 
 @dataclass
 class TipoEntrevista:
-    """
-    Representa um tipo de entrevista.
+    """Guarda um tipo de entrevista e informa se ele usa área técnica."""
 
-    Exemplos:
-
-    - Comportamental
-    - Técnica
-    - Liderança
-
-    O campo usa_area_tecnica determina se o tipo
-    exige seleção de área e subárea.
-    """
-
-    id: Optional[int] = None
-
+    id: int | None = None
     nome: str = ""
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     ativo: bool = True
-
-    data_criacao: Optional[str] = None
-
+    data_criacao: str | None = None
     usa_area_tecnica: bool = False
 
 
@@ -96,30 +42,14 @@ class TipoEntrevista:
 
 @dataclass
 class AreaTecnica:
-    """
-    Representa uma área disponível para entrevistas técnicas.
+    """Representa uma área usada nas entrevistas técnicas."""
 
-    Áreas iniciais:
-
-    - Direito
-    - Psicologia
-    - Administração
-    - Economia
-    - Ciências Contábeis
-    - Tecnologia
-    """
-
-    id: Optional[int] = None
-
+    id: int | None = None
     nome: str = ""
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     ativo: bool = True
-
-    ordem: Optional[int] = None
-
-    data_criacao: Optional[str] = None
+    ordem: int | None = None
+    data_criacao: str | None = None
 
 
 # ============================================================
@@ -128,28 +58,16 @@ class AreaTecnica:
 
 @dataclass
 class SubareaTecnica:
-    """
-    Representa uma subárea vinculada a uma área técnica.
+    """Representa uma subárea ligada a uma área técnica."""
 
-    Toda área possui obrigatoriamente uma subárea
-    protegida chamada Geral.
-    """
-
-    id: Optional[int] = None
-
-    area_tecnica_id: Optional[int] = None
-
+    id: int | None = None
+    area_tecnica_id: int | None = None
     nome: str = ""
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     eh_geral: bool = False
-
     ativo: bool = True
-
-    ordem: Optional[int] = None
-
-    data_criacao: Optional[str] = None
+    ordem: int | None = None
+    data_criacao: str | None = None
 
 
 # ============================================================
@@ -158,24 +76,11 @@ class SubareaTecnica:
 
 @dataclass
 class Competencia:
-    """
-    Representa uma competência profissional
-    associada às perguntas.
+    """Representa uma competência profissional ligada às perguntas."""
 
-    Exemplos:
-
-    - Comunicação
-    - Trabalho em equipe
-    - Liderança
-    - Resolução de problemas
-    """
-
-    id: Optional[int] = None
-
+    id: int | None = None
     nome: str = ""
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     ativa: bool = True
 
 
@@ -185,29 +90,13 @@ class Competencia:
 
 @dataclass
 class CriterioAvaliacao:
-    """
-    Representa um critério utilizado na análise
-    das respostas.
+    """Representa um critério usado para avaliar as respostas."""
 
-    Exemplos:
-
-    - Clareza
-    - Objetividade
-    - Coerência
-    - Argumentação
-    - Adequação à pergunta
-    """
-
-    id: Optional[int] = None
-
+    id: int | None = None
     nome: str = ""
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     peso: float = 1.0
-
-    ordem: Optional[int] = None
-
+    ordem: int | None = None
     ativo: bool = True
 
 
@@ -217,47 +106,20 @@ class CriterioAvaliacao:
 
 @dataclass
 class Pergunta:
-    """
-    Representa uma pergunta cadastrada no sistema.
+    """Guarda os dados de uma pergunta cadastrada no sistema."""
 
-    Cada pergunta possui:
-
-    - tipo de entrevista;
-    - competência;
-    - texto;
-    - peso;
-    - indicação de utilização do método STAR.
-
-    Perguntas pertencentes a tipos que utilizam
-    área técnica também poderão possuir:
-
-    - área técnica;
-    - subárea técnica.
-    """
-
-    id: Optional[int] = None
-
-    tipo_entrevista_id: Optional[int] = None
-
-    competencia_id: Optional[int] = None
-
+    id: int | None = None
+    tipo_entrevista_id: int | None = None
+    competencia_id: int | None = None
     texto: str = ""
-
-    exemplo_esperado: Optional[str] = None
-
-    ordem: Optional[int] = None
-
+    exemplo_esperado: str | None = None
+    ordem: int | None = None
     ativa: bool = True
-
     peso: float = 1.0
-
     usa_star: bool = False
-
-    data_criacao: Optional[str] = None
-
-    area_tecnica_id: Optional[int] = None
-
-    subarea_tecnica_id: Optional[int] = None
+    data_criacao: str | None = None
+    area_tecnica_id: int | None = None
+    subarea_tecnica_id: int | None = None
 
 
 # ============================================================
@@ -266,67 +128,28 @@ class Pergunta:
 
 @dataclass
 class Entrevista:
-    """
-    Representa uma entrevista realizada pelo estudante.
+    """Guarda os dados da entrevista e os nomes históricos aplicados nela."""
 
-    Status possíveis:
-
-    - em_andamento
-    - finalizada
-    - em_analise
-    - avaliada
-    - erro_analise
-    - cancelada
-
-    Os campos terminados em "_aplicado" preservam
-    informações históricas.
-
-    Dessa forma, alterações administrativas futuras
-    não modificam entrevistas já realizadas.
-    """
-
-    id: Optional[int] = None
-
-    usuario_id: Optional[int] = None
-
-    tipo_entrevista_id: Optional[int] = None
-
-    data_inicio: Optional[str] = None
-
-    data_fim: Optional[str] = None
-
+    id: int | None = None
+    usuario_id: int | None = None
+    tipo_entrevista_id: int | None = None
+    data_inicio: str | None = None
+    data_fim: str | None = None
     status: str = "em_andamento"
+    pontuacao_final: float | None = None
+    observacoes: str | None = None
 
-    pontuacao_final: Optional[float] = None
+    # Guarda o nome e a descrição do tipo como eram no momento da entrevista.
+    tipo_entrevista_nome_aplicado: str | None = None
+    tipo_entrevista_descricao_aplicada: str | None = None
 
-    observacoes: Optional[str] = None
+    # Guarda a área e a subárea escolhidas para entrevistas técnicas.
+    area_tecnica_id: int | None = None
+    subarea_tecnica_id: int | None = None
 
-
-    # --------------------------------------------------------
-    # SNAPSHOT DO TIPO DE ENTREVISTA
-    # --------------------------------------------------------
-
-    tipo_entrevista_nome_aplicado: Optional[str] = None
-
-    tipo_entrevista_descricao_aplicada: Optional[str] = None
-
-
-    # --------------------------------------------------------
-    # ÁREA E SUBÁREA TÉCNICA
-    # --------------------------------------------------------
-
-    area_tecnica_id: Optional[int] = None
-
-    subarea_tecnica_id: Optional[int] = None
-
-
-    # --------------------------------------------------------
-    # SNAPSHOT DA ÁREA E SUBÁREA
-    # --------------------------------------------------------
-
-    area_tecnica_nome_aplicado: Optional[str] = None
-
-    subarea_tecnica_nome_aplicado: Optional[str] = None
+    # Preserva os nomes da área e da subárea usados na entrevista.
+    area_tecnica_nome_aplicado: str | None = None
+    subarea_tecnica_nome_aplicado: str | None = None
 
 
 # ============================================================
@@ -335,91 +158,33 @@ class Entrevista:
 
 @dataclass
 class EntrevistaPergunta:
-    """
-    Representa uma pergunta congelada no momento em
-    que a entrevista é iniciada.
+    """Guarda a cópia da pergunta usada quando a entrevista foi iniciada."""
 
-    Essa entidade será utilizada para impedir que uma
-    alteração administrativa em uma pergunta modifique
-    uma entrevista que já começou.
+    id: int | None = None
+    entrevista_id: int | None = None
+    pergunta_id: int | None = None
 
-    Exemplo:
-
-    uma entrevista técnica é iniciada com:
-
-    área:
-        Tecnologia
-
-    subárea:
-        Segurança da Informação
-
-    As perguntas escolhidas naquele momento serão
-    copiadas para entrevista_perguntas.
-
-    Posteriormente, mesmo que o administrador edite
-    a pergunta original, a entrevista continuará
-    utilizando o snapshot.
-    """
-
-    id: Optional[int] = None
-
-    entrevista_id: Optional[int] = None
-
-    pergunta_id: Optional[int] = None
-
-
-    # --------------------------------------------------------
-    # SNAPSHOT DA PERGUNTA
-    # --------------------------------------------------------
-
+    # Snapshot da pergunta.
     pergunta_texto_aplicado: str = ""
+    exemplo_esperado_aplicado: str | None = None
 
-    exemplo_esperado_aplicado: Optional[str] = None
-
-
-    # --------------------------------------------------------
-    # SNAPSHOT DA COMPETÊNCIA
-    # --------------------------------------------------------
-
-    competencia_id_aplicada: Optional[int] = None
-
+    # Snapshot da competência.
+    competencia_id_aplicada: int | None = None
     competencia_nome_aplicada: str = ""
 
+    # Snapshot da área técnica.
+    area_tecnica_id_aplicada: int | None = None
+    area_tecnica_nome_aplicada: str | None = None
 
-    # --------------------------------------------------------
-    # SNAPSHOT DA ÁREA
-    # --------------------------------------------------------
+    # Snapshot da subárea técnica.
+    subarea_tecnica_id_aplicada: int | None = None
+    subarea_tecnica_nome_aplicada: str | None = None
 
-    area_tecnica_id_aplicada: Optional[int] = None
-
-    area_tecnica_nome_aplicada: Optional[str] = None
-
-
-    # --------------------------------------------------------
-    # SNAPSHOT DA SUBÁREA
-    # --------------------------------------------------------
-
-    subarea_tecnica_id_aplicada: Optional[int] = None
-
-    subarea_tecnica_nome_aplicada: Optional[str] = None
-
-
-    # --------------------------------------------------------
-    # CONFIGURAÇÕES HISTÓRICAS DA PERGUNTA
-    # --------------------------------------------------------
-
+    # Configurações da pergunta usadas naquela entrevista.
     peso_pergunta_aplicado: float = 1.0
-
     usa_star_aplicado: bool = False
-
-    ordem_pergunta_aplicada: Optional[int] = None
-
-
-    # --------------------------------------------------------
-    # DATA
-    # --------------------------------------------------------
-
-    data_aplicacao: Optional[str] = None
+    ordem_pergunta_aplicada: int | None = None
+    data_aplicacao: str | None = None
 
 
 # ============================================================
@@ -428,48 +193,23 @@ class EntrevistaPergunta:
 
 @dataclass
 class Resposta:
-    """
-    Representa uma resposta fornecida pelo estudante.
+    """Guarda uma resposta do estudante e o snapshot da pergunta respondida."""
 
-    Cada resposta pertence a:
-
-    - uma entrevista;
-    - uma pergunta.
-
-    A resposta também mantém o snapshot histórico
-    da pergunta utilizada no momento da resposta.
-    """
-
-    id: Optional[int] = None
-
-    entrevista_id: Optional[int] = None
-
-    pergunta_id: Optional[int] = None
-
+    id: int | None = None
+    entrevista_id: int | None = None
+    pergunta_id: int | None = None
     texto_resposta: str = ""
+    tempo_resposta: int | None = None
+    data_resposta: str | None = None
 
-    tempo_resposta: Optional[int] = None
-
-    data_resposta: Optional[str] = None
-
-
-    # --------------------------------------------------------
-    # SNAPSHOT HISTÓRICO DA PERGUNTA
-    # --------------------------------------------------------
-
-    pergunta_texto_aplicado: Optional[str] = None
-
-    exemplo_esperado_aplicado: Optional[str] = None
-
-    competencia_id_aplicada: Optional[int] = None
-
-    competencia_nome_aplicada: Optional[str] = None
-
-    peso_pergunta_aplicado: Optional[float] = None
-
-    usa_star_aplicado: Optional[bool] = None
-
-    ordem_pergunta_aplicada: Optional[int] = None
+    # Snapshot histórico da pergunta no momento da resposta.
+    pergunta_texto_aplicado: str | None = None
+    exemplo_esperado_aplicado: str | None = None
+    competencia_id_aplicada: int | None = None
+    competencia_nome_aplicada: str | None = None
+    peso_pergunta_aplicado: float | None = None
+    usa_star_aplicado: bool | None = None
+    ordem_pergunta_aplicada: int | None = None
 
 
 # ============================================================
@@ -478,38 +218,16 @@ class Resposta:
 
 @dataclass
 class Avaliacao:
-    """
-    Representa a avaliação geral de uma resposta.
+    """Guarda o resultado geral da avaliação de uma resposta."""
 
-    A avaliação contém:
-
-    - pontuação consolidada;
-    - pontos fortes;
-    - pontos de melhoria;
-    - feedback;
-    - identificação do modelo de IA.
-
-    As notas individuais não ficam diretamente
-    nesta classe.
-
-    Elas são armazenadas por AvaliacaoCriterio.
-    """
-
-    id: Optional[int] = None
-
-    resposta_id: Optional[int] = None
-
-    pontuacao: Optional[float] = None
-
-    pontos_fortes: Optional[str] = None
-
-    pontos_melhoria: Optional[str] = None
-
-    feedback: Optional[str] = None
-
-    modelo_ia: Optional[str] = None
-
-    data_avaliacao: Optional[str] = None
+    id: int | None = None
+    resposta_id: int | None = None
+    pontuacao: float | None = None
+    pontos_fortes: str | None = None
+    pontos_melhoria: str | None = None
+    feedback: str | None = None
+    modelo_ia: str | None = None
+    data_avaliacao: str | None = None
 
 
 # ============================================================
@@ -518,37 +236,19 @@ class Avaliacao:
 
 @dataclass
 class AvaliacaoCriterio:
-    """
-    Representa a nota atribuída a um critério
-    dentro de uma avaliação.
+    """Guarda a nota de um critério e os dados históricos usados na avaliação."""
 
-    Os campos de snapshot preservam o critério
-    exatamente como ele existia no momento
-    da avaliação.
-    """
-
-    id: Optional[int] = None
-
-    avaliacao_id: Optional[int] = None
-
-    criterio_id: Optional[int] = None
-
+    id: int | None = None
+    avaliacao_id: int | None = None
+    criterio_id: int | None = None
     nota: float = 0.0
+    observacao: str | None = None
 
-    observacao: Optional[str] = None
-
-
-    # --------------------------------------------------------
-    # SNAPSHOT HISTÓRICO DO CRITÉRIO
-    # --------------------------------------------------------
-
-    peso_aplicado: Optional[float] = None
-
-    criterio_nome_aplicado: Optional[str] = None
-
-    criterio_descricao_aplicada: Optional[str] = None
-
-    criterio_ordem_aplicada: Optional[int] = None
+    # Snapshot histórico do critério.
+    peso_aplicado: float | None = None
+    criterio_nome_aplicado: str | None = None
+    criterio_descricao_aplicada: str | None = None
+    criterio_ordem_aplicada: int | None = None
 
 
 # ============================================================
@@ -557,29 +257,14 @@ class AvaliacaoCriterio:
 
 @dataclass
 class HistoricoAcesso:
-    """
-    Representa uma ação realizada pelo usuário.
+    """Guarda uma ação realizada por um usuário no sistema."""
 
-    Exemplos:
-
-    - login
-    - logout
-    - início de entrevista
-    - finalização de entrevista
-    - alteração administrativa
-    """
-
-    id: Optional[int] = None
-
-    usuario_id: Optional[int] = None
-
+    id: int | None = None
+    usuario_id: int | None = None
     acao: str = ""
-
-    descricao: Optional[str] = None
-
-    data_acao: Optional[str] = None
-
-    ip: Optional[str] = None
+    descricao: str | None = None
+    data_acao: str | None = None
+    ip: str | None = None
 
 
 # ============================================================
@@ -588,25 +273,10 @@ class HistoricoAcesso:
 
 @dataclass
 class Configuracao:
-    """
-    Representa uma configuração geral da aplicação.
+    """Guarda uma configuração geral e não sensível da aplicação."""
 
-    Exemplos:
-
-    - quantidade padrão de perguntas;
-    - parâmetros de avaliação;
-    - outras configurações do sistema.
-
-    Chaves, tokens e credenciais sensíveis
-    não devem ser armazenados nesta entidade.
-    """
-
-    id: Optional[int] = None
-
+    id: int | None = None
     chave: str = ""
-
-    valor: Optional[str] = None
-
-    descricao: Optional[str] = None
-
-    data_atualizacao: Optional[str] = None
+    valor: str | None = None
+    descricao: str | None = None
+    data_atualizacao: str | None = None

@@ -1,209 +1,71 @@
-"""
-routers/criterios.py
+"""Rotas usadas para consultar e administrar os critérios de avaliação."""
 
-Endpoints administrativos relacionados aos
-critérios de avaliação.
-
-Versão: 0.1
-"""
-
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    status
-)
-
-from ..models import Usuario
-
-from ..schemas import (
-    CriterioCriar,
-    CriterioAtualizar,
-    CriterioResposta,
-    CriterioDetalheResposta,
-    ResumoPesosResposta
-)
-
-from ..security import (
-    obter_usuario_atual,
-    obter_administrador_atual
-)
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..criterios import (
-    cadastrar_criterio,
-    listar_criterios,
-    buscar_criterio,
-    editar_criterio,
     ativar_criterio,
+    buscar_criterio,
+    cadastrar_criterio,
+    editar_criterio,
     inativar_criterio,
+    listar_criterios,
     obter_detalhes_criterio,
     obter_resumo_pesos
 )
+from ..models import Usuario
+from ..schemas import CriterioAtualizar, CriterioCriar, CriterioDetalheResposta, CriterioResposta, ResumoPesosResposta
+from ..security import obter_administrador_atual, obter_usuario_atual
+
+# Agrupa as rotas relacionadas aos critérios de avaliação.
+router = APIRouter(prefix="/criterios", tags=["Critérios de Avaliação"])
 
 
-# ============================================================
-# ROUTER
-# ============================================================
-
-router = APIRouter(
-    prefix="/criterios",
-    tags=["Critérios de Avaliação"]
-)
-
-
-# ============================================================
-# RESUMO DOS PESOS
-# ============================================================
-
-@router.get(
-    "/resumo/pesos",
-    response_model=ResumoPesosResposta
-)
-def resumo_pesos(
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Retorna a distribuição atual dos pesos.
-
-    A rota é declarada antes de /{criterio_id}
-    para evitar conflito de roteamento.
-    """
-
+@router.get("/resumo/pesos", response_model=ResumoPesosResposta)
+def resumo_pesos(administrador: Usuario = Depends(obter_administrador_atual)):
+    """Mostra a distribuição atual dos pesos dos critérios ativos."""
+    # Esta rota fica antes de /{criterio_id} para que "resumo" não seja interpretado como um ID.
     return obter_resumo_pesos()
 
 
-# ============================================================
-# LISTAR
-# ============================================================
-
-@router.get(
-    "",
-    response_model=list[CriterioResposta]
-)
-def listar(
-    somente_ativos: bool = False,
-    usuario: Usuario = Depends(
-        obter_usuario_atual
-    )
-):
-    """
-    Lista os critérios de avaliação.
-    """
-
-    return listar_criterios(
-        somente_ativos=somente_ativos
-    )
+@router.get("", response_model=list[CriterioResposta])
+def listar(somente_ativos: bool = False, usuario: Usuario = Depends(obter_usuario_atual)):
+    """Lista os critérios de avaliação para qualquer usuário autenticado."""
+    return listar_criterios(somente_ativos=somente_ativos)
 
 
-# ============================================================
-# CONSULTAR
-# ============================================================
-
-@router.get(
-    "/{criterio_id}",
-    response_model=CriterioResposta
-)
-def consultar(
-    criterio_id: int,
-    usuario: Usuario = Depends(
-        obter_usuario_atual
-    )
-):
-    """
-    Consulta um critério pelo ID.
-    """
-
+@router.get("/{criterio_id}", response_model=CriterioResposta)
+def consultar(criterio_id: int, usuario: Usuario = Depends(obter_usuario_atual)):
+    """Consulta um critério de avaliação pelo ID informado."""
     try:
-
-        criterio = buscar_criterio(
-            criterio_id
-        )
-
+        criterio = buscar_criterio(criterio_id)
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
-
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
     if criterio is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Critério não encontrado."
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Critério não encontrado.")
 
     return criterio
 
 
-# ============================================================
-# DETALHES
-# ============================================================
-
-@router.get(
-    "/{criterio_id}/detalhes",
-    response_model=CriterioDetalheResposta
-)
-def detalhes(
-    criterio_id: int,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Retorna detalhes administrativos.
-    """
-
+@router.get("/{criterio_id}/detalhes", response_model=CriterioDetalheResposta)
+def detalhes(criterio_id: int, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Mostra os dados administrativos e o uso histórico de um critério."""
     try:
-
-        criterio = obter_detalhes_criterio(
-            criterio_id
-        )
-
+        criterio = obter_detalhes_criterio(criterio_id)
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
-
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
     if criterio is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Critério não encontrado."
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Critério não encontrado.")
 
     return criterio
 
 
-# ============================================================
-# CADASTRAR
-# ============================================================
-
-@router.post(
-    "",
-    response_model=CriterioResposta,
-    status_code=status.HTTP_201_CREATED
-)
-def cadastrar(
-    dados: CriterioCriar,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Cadastra um novo critério.
-    """
-
+@router.post("", response_model=CriterioResposta, status_code=status.HTTP_201_CREATED)
+def cadastrar(dados: CriterioCriar, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Cadastra um novo critério de avaliação."""
     try:
-
+        # Cria o critério com os dados validados pelo schema e pelo serviço.
         criterio_id = cadastrar_criterio(
             nome=dados.nome,
             descricao=dados.descricao,
@@ -211,69 +73,34 @@ def cadastrar(
             ordem=dados.ordem
         )
 
-
-        criterio = buscar_criterio(
-            criterio_id
-        )
-
+        criterio = buscar_criterio(criterio_id)
 
         if criterio is None:
-
             raise HTTPException(
-                status_code=(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR
-                ),
-                detail=(
-                    "O critério foi cadastrado, "
-                    "mas não pôde ser recuperado."
-                )
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="O critério foi cadastrado, mas não pôde ser recuperado."
             )
 
-
         return criterio
-
-
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
 
-# ============================================================
-# ATUALIZAR
-# ============================================================
-
-@router.put(
-    "/{criterio_id}",
-    response_model=CriterioResposta
-)
+@router.put("/{criterio_id}", response_model=CriterioResposta)
 def atualizar(
     criterio_id: int,
     dados: CriterioAtualizar,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
+    administrador: Usuario = Depends(obter_administrador_atual)
 ):
-    """
-    Atualiza nome, descrição, peso e ordem.
-    """
-
+    """Atualiza o nome, a descrição, o peso e a ordem de um critério."""
     try:
-
-        criterio_atual = buscar_criterio(
-            criterio_id
-        )
-
+        # Primeiro confirma que o critério existe.
+        criterio_atual = buscar_criterio(criterio_id)
 
         if criterio_atual is None:
-
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Critério não encontrado."
-            )
-
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Critério não encontrado.")
 
         alterado = editar_criterio(
             criterio_id=criterio_id,
@@ -283,147 +110,53 @@ def atualizar(
             ordem=dados.ordem
         )
 
-
         if not alterado:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Critério não encontrado.")
 
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Critério não encontrado."
-            )
-
-
-        return buscar_criterio(
-            criterio_id
-        )
-
-
+        return buscar_criterio(criterio_id)
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
 
-# ============================================================
-# INATIVAR
-# ============================================================
-
-@router.put(
-    "/{criterio_id}/inativar",
-    response_model=CriterioResposta
-)
-def inativar(
-    criterio_id: int,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Inativa um critério sem apagá-lo.
-    """
-
+@router.put("/{criterio_id}/inativar", response_model=CriterioResposta)
+def inativar(criterio_id: int, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Inativa um critério sem apagar suas avaliações históricas."""
     try:
-
-        criterio = buscar_criterio(
-            criterio_id
-        )
-
+        criterio = buscar_criterio(criterio_id)
 
         if criterio is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Critério não encontrado.")
 
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Critério não encontrado."
-            )
-
-
-        alterado = inativar_criterio(
-            criterio_id
-        )
-
+        alterado = inativar_criterio(criterio_id)
 
         if not alterado:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Não foi possível inativar o critério.")
 
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Não foi possível inativar "
-                    "o critério."
-                )
-            )
-
-
-        return buscar_criterio(
-            criterio_id
-        )
-
-
+        return buscar_criterio(criterio_id)
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
 
-# ============================================================
-# ATIVAR
-# ============================================================
-
-@router.put(
-    "/{criterio_id}/ativar",
-    response_model=CriterioResposta
-)
-def ativar(
-    criterio_id: int,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Reativa um critério.
-    """
-
+@router.put("/{criterio_id}/ativar", response_model=CriterioResposta)
+def ativar(criterio_id: int, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Reativa um critério que estava inativo."""
     try:
-
-        criterio = buscar_criterio(
-            criterio_id
-        )
-
+        criterio = buscar_criterio(criterio_id)
 
         if criterio is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Critério não encontrado.")
 
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Critério não encontrado."
-            )
-
-
-        alterado = ativar_criterio(
-            criterio_id
-        )
-
+        alterado = ativar_criterio(criterio_id)
 
         if not alterado:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Não foi possível ativar o critério.")
 
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Não foi possível ativar "
-                    "o critério."
-                )
-            )
-
-
-        return buscar_criterio(
-            criterio_id
-        )
-
-
+        return buscar_criterio(criterio_id)
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))

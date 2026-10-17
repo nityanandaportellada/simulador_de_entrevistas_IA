@@ -1,1055 +1,358 @@
-"""
-areas_tecnicas.py
-
-Módulo responsável pelo gerenciamento das áreas técnicas
-do Simulador de Entrevistas.
-
-Responsabilidades:
-
-- cadastrar áreas técnicas;
-- listar áreas técnicas;
-- buscar área por ID;
-- editar áreas;
-- ativar áreas;
-- inativar áreas;
-- criar automaticamente a subárea Geral;
-- proteger vínculos com perguntas técnicas.
-
-Exemplos de áreas iniciais:
-
-- Direito;
-- Psicologia;
-- Administração;
-- Economia;
-- Ciências Contábeis;
-- Tecnologia.
-
-O acesso ao banco de dados é realizado através
-do módulo database.py.
-"""
+"""Funções responsáveis pelo gerenciamento das áreas técnicas do simulador."""
 
 import sqlite3
 
-
 try:
-
     from .database import conectar_banco
-
     from .models import AreaTecnica
-
-
 except ImportError:
-
     from database import conectar_banco
-
     from models import AreaTecnica
 
 
-# ============================================================
-# CONVERTER REGISTRO EM OBJETO
-# ============================================================
-
-def _registro_para_area(
-    registro
-) -> AreaTecnica:
-    """
-    Converte um registro sqlite3.Row
-    em um objeto AreaTecnica.
-    """
-
+def _registro_para_area(registro) -> AreaTecnica:
+    """Transforma uma linha do SQLite em um objeto AreaTecnica."""
     return AreaTecnica(
-
-        id=registro[
-            "id"
-        ],
-
-        nome=registro[
-            "nome"
-        ],
-
-        descricao=registro[
-            "descricao"
-        ],
-
-        ativo=bool(
-            registro[
-                "ativo"
-            ]
-        ),
-
-        ordem=registro[
-            "ordem"
-        ],
-
-        data_criacao=registro[
-            "data_criacao"
-        ]
-
+        id=registro["id"],
+        nome=registro["nome"],
+        descricao=registro["descricao"],
+        ativo=bool(registro["ativo"]),
+        ordem=registro["ordem"],
+        data_criacao=registro["data_criacao"]
     )
 
 
-# ============================================================
-# VALIDAR ID
-# ============================================================
-
-def _validar_id(
-    valor: int,
-    campo: str
-) -> None:
-    """
-    Valida identificadores numéricos.
-    """
-
-    if (
-        valor is None
-        or valor <= 0
-    ):
-
-        raise ValueError(
-            f"{campo} inválido."
-        )
+def _validar_id(valor: int, campo: str) -> None:
+    """Confere se o identificador informado existe e é maior que zero."""
+    if valor is None or valor <= 0:
+        raise ValueError(f"{campo} inválido.")
 
 
-# ============================================================
-# VALIDAR NOME
-# ============================================================
-
-def _validar_nome(
-    nome: str
-) -> str:
-    """
-    Valida e normaliza o nome da área.
-    """
-
+def _validar_nome(nome: str) -> str:
+    """Remove espaços extras e valida o tamanho do nome da área."""
     if nome is None:
-
-        raise ValueError(
-            "O nome da área é obrigatório."
-        )
-
+        raise ValueError("O nome da área é obrigatório.")
 
     nome = nome.strip()
 
-
     if len(nome) < 2:
-
-        raise ValueError(
-            "O nome da área deve possuir "
-            "pelo menos 2 caracteres."
-        )
-
+        raise ValueError("O nome da área deve possuir pelo menos 2 caracteres.")
 
     if len(nome) > 150:
-
-        raise ValueError(
-            "O nome da área deve possuir "
-            "no máximo 150 caracteres."
-        )
-
+        raise ValueError("O nome da área deve possuir no máximo 150 caracteres.")
 
     return nome
 
 
-# ============================================================
-# VALIDAR ORDEM
-# ============================================================
-
-def _validar_ordem(
-    ordem: int | None
-) -> None:
-    """
-    Valida a ordem de exibição.
-    """
-
-    if (
-        ordem is not None
-        and ordem < 0
-    ):
-
-        raise ValueError(
-            "A ordem não pode ser negativa."
-        )
+def _validar_ordem(ordem: int | None) -> None:
+    """Impede o uso de uma ordem de exibição negativa."""
+    if ordem is not None and ordem < 0:
+        raise ValueError("A ordem não pode ser negativa.")
 
 
-# ============================================================
-# VERIFICAR NOME DUPLICADO
-# ============================================================
-
-def _nome_duplicado(
-    cursor,
-    nome: str,
-    ignorar_id: int | None = None
-) -> bool:
-    """
-    Verifica se já existe outra área
-    com o mesmo nome.
-    """
-
+def _nome_duplicado(cursor, nome: str, ignorar_id: int | None = None) -> bool:
+    """Verifica se já existe outra área cadastrada com o mesmo nome."""
     if ignorar_id is None:
-
         cursor.execute(
             """
             SELECT id
-
             FROM areas_tecnicas
-
-            WHERE LOWER(nome) =
-                LOWER(?)
-
+            WHERE LOWER(nome) = LOWER(?)
             LIMIT 1
             """,
-            (
-                nome,
-            )
+            (nome,)
         )
-
-
     else:
-
         cursor.execute(
             """
             SELECT id
-
             FROM areas_tecnicas
-
-            WHERE LOWER(nome) =
-                LOWER(?)
-
-              AND id <> ?
-
+            WHERE LOWER(nome) = LOWER(?) AND id <> ?
             LIMIT 1
             """,
-            (
-                nome,
-                ignorar_id
-            )
+            (nome, ignorar_id)
         )
 
-
-    return (
-        cursor.fetchone()
-        is not None
-    )
+    return cursor.fetchone() is not None
 
 
-# ============================================================
-# BUSCAR ÁREA
-# ============================================================
-
-def buscar_area_tecnica(
-    area_id: int
-) -> AreaTecnica | None:
-    """
-    Busca uma área técnica pelo ID.
-    """
-
-    _validar_id(
-        area_id,
-        "ID da área"
-    )
-
-
+def buscar_area_tecnica(area_id: int) -> AreaTecnica | None:
+    """Busca uma área técnica pelo ID e devolve None quando ela não existe."""
+    _validar_id(area_id, "ID da área")
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
             """
-            SELECT
-
-                id,
-                nome,
-                descricao,
-                ativo,
-                ordem,
-                data_criacao
-
+            SELECT id, nome, descricao, ativo, ordem, data_criacao
             FROM areas_tecnicas
-
             WHERE id = ?
             """,
-            (
-                area_id,
-            )
+            (area_id,)
         )
-
-
         registro = cursor.fetchone()
 
-
         if registro is None:
-
             return None
 
-
-        return _registro_para_area(
-            registro
-        )
-
-
+        return _registro_para_area(registro)
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# LISTAR ÁREAS
-# ============================================================
-
-def listar_areas_tecnicas(
-    somente_ativas: bool = True
-) -> list[AreaTecnica]:
-    """
-    Lista as áreas técnicas cadastradas.
-
-    Quando somente_ativas for True,
-    retorna apenas áreas ativas.
-    """
-
+def listar_areas_tecnicas(somente_ativas: bool = True) -> list[AreaTecnica]:
+    """Lista as áreas cadastradas e permite filtrar somente as áreas ativas."""
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         if somente_ativas:
-
             cursor.execute(
                 """
-                SELECT
-
-                    id,
-                    nome,
-                    descricao,
-                    ativo,
-                    ordem,
-                    data_criacao
-
+                SELECT id, nome, descricao, ativo, ordem, data_criacao
                 FROM areas_tecnicas
-
                 WHERE ativo = 1
-
-                ORDER BY
-
-                    COALESCE(
-                        ordem,
-                        999999
-                    ),
-
-                    nome,
-                    id
+                ORDER BY COALESCE(ordem, 999999), nome, id
                 """
             )
-
-
         else:
-
             cursor.execute(
                 """
-                SELECT
-
-                    id,
-                    nome,
-                    descricao,
-                    ativo,
-                    ordem,
-                    data_criacao
-
+                SELECT id, nome, descricao, ativo, ordem, data_criacao
                 FROM areas_tecnicas
-
-                ORDER BY
-
-                    COALESCE(
-                        ordem,
-                        999999
-                    ),
-
-                    nome,
-                    id
+                ORDER BY COALESCE(ordem, 999999), nome, id
                 """
             )
-
 
         registros = cursor.fetchall()
-
-
-        return [
-
-            _registro_para_area(
-                registro
-            )
-
-            for registro
-            in registros
-
-        ]
-
-
+        return [_registro_para_area(registro) for registro in registros]
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# CADASTRAR ÁREA
-# ============================================================
-
-def cadastrar_area_tecnica(
-    area: AreaTecnica
-) -> int:
-    """
-    Cadastra uma nova área técnica.
-
-    Ao criar a área, a subárea protegida
-    "Geral" é criada automaticamente.
-
-    Retorna o ID da nova área.
-    """
-
-    nome = _validar_nome(
-        area.nome
-    )
-
-
-    _validar_ordem(
-        area.ordem
-    )
-
-
+def cadastrar_area_tecnica(area: AreaTecnica) -> int:
+    """Cadastra uma área e cria automaticamente a subárea protegida Geral."""
+    nome = _validar_nome(area.nome)
+    _validar_ordem(area.ordem)
     descricao = area.descricao
 
-
+    # Textos vazios são gravados como NULL no banco.
     if descricao is not None:
-
-        descricao = (
-            descricao.strip()
-            or None
-        )
-
+        descricao = descricao.strip() or None
 
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
+        # A área e a subárea Geral precisam ser criadas na mesma transação.
+        cursor.execute("BEGIN IMMEDIATE")
+
+        if _nome_duplicado(cursor, nome):
+            raise ValueError("Já existe uma área técnica com este nome.")
 
         cursor.execute(
             """
-            BEGIN IMMEDIATE
-            """
-        )
-
-
-        if _nome_duplicado(
-            cursor,
-            nome
-        ):
-
-            raise ValueError(
-                "Já existe uma área técnica "
-                "com este nome."
-            )
-
-
-        cursor.execute(
-            """
-            INSERT INTO areas_tecnicas (
-
-                nome,
-                descricao,
-                ativo,
-                ordem
-
-            )
-
-            VALUES (
-                ?,
-                ?,
-                1,
-                ?
-            )
+            INSERT INTO areas_tecnicas (nome, descricao, ativo, ordem)
+            VALUES (?, ?, 1, ?)
             """,
-            (
-                nome,
-                descricao,
-                area.ordem
-            )
+            (nome, descricao, area.ordem)
         )
-
-
         area_id = cursor.lastrowid
 
-
-        # ----------------------------------------------------
-        # CRIAR SUBÁREA GERAL
-        # ----------------------------------------------------
-
+        # Toda nova área recebe uma subárea Geral para perguntas comuns da área.
         cursor.execute(
             """
             INSERT INTO subareas_tecnicas (
-
-                area_tecnica_id,
-                nome,
-                descricao,
-                eh_geral,
-                ativo,
-                ordem
-
+                area_tecnica_id, nome, descricao, eh_geral, ativo, ordem
             )
-
-            VALUES (
-                ?,
-                'Geral',
-                ?,
-                1,
-                1,
-                1
-            )
+            VALUES (?, 'Geral', ?, 1, 1, 1)
             """,
-            (
-                area_id,
-
-                (
-                    "Subárea padrão destinada "
-                    "a perguntas gerais da área."
-                )
-            )
+            (area_id, "Subárea padrão destinada a perguntas gerais da área.")
         )
-
 
         conexao.commit()
-
-
-        return int(
-            area_id
-        )
-
-
-    except (
-        sqlite3.Error,
-        ValueError
-    ):
-
+        return int(area_id)
+    except (sqlite3.Error, ValueError):
         conexao.rollback()
-
         raise
-
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# EDITAR ÁREA
-# ============================================================
-
-def editar_area_tecnica(
-    area_id: int,
-    area: AreaTecnica
-) -> bool:
-    """
-    Atualiza os dados administrativos
-    de uma área técnica.
-
-    O status ativo/inativo não é alterado
-    por esta função.
-    """
-
-    _validar_id(
-        area_id,
-        "ID da área"
-    )
-
-
-    nome = _validar_nome(
-        area.nome
-    )
-
-
-    _validar_ordem(
-        area.ordem
-    )
-
-
+def editar_area_tecnica(area_id: int, area: AreaTecnica) -> bool:
+    """Atualiza nome, descrição e ordem de uma área sem mudar seu status."""
+    _validar_id(area_id, "ID da área")
+    nome = _validar_nome(area.nome)
+    _validar_ordem(area.ordem)
     descricao = area.descricao
 
-
     if descricao is not None:
-
-        descricao = (
-            descricao.strip()
-            or None
-        )
-
+        descricao = descricao.strip() or None
 
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
-        cursor.execute(
-            """
-            BEGIN IMMEDIATE
-            """
-        )
-
-
-        cursor.execute(
-            """
-            SELECT id
-
-            FROM areas_tecnicas
-
-            WHERE id = ?
-            """,
-            (
-                area_id,
-            )
-        )
-
+        # A verificação e a alteração são feitas juntas para evitar conflito de escrita.
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT id FROM areas_tecnicas WHERE id = ?", (area_id,))
 
         if cursor.fetchone() is None:
-
             conexao.rollback()
-
             return False
 
-
-        if _nome_duplicado(
-            cursor,
-            nome,
-            area_id
-        ):
-
-            raise ValueError(
-                "Já existe outra área técnica "
-                "com este nome."
-            )
-
+        if _nome_duplicado(cursor, nome, area_id):
+            raise ValueError("Já existe outra área técnica com este nome.")
 
         cursor.execute(
             """
             UPDATE areas_tecnicas
-
-            SET
-
-                nome = ?,
-                descricao = ?,
-                ordem = ?
-
+            SET nome = ?, descricao = ?, ordem = ?
             WHERE id = ?
             """,
-            (
-                nome,
-                descricao,
-                area.ordem,
-                area_id
-            )
+            (nome, descricao, area.ordem, area_id)
         )
 
-
         conexao.commit()
-
-
         return True
-
-
-    except (
-        sqlite3.Error,
-        ValueError
-    ):
-
+    except (sqlite3.Error, ValueError):
         conexao.rollback()
-
         raise
-
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# CONTAR PERGUNTAS ATIVAS DA ÁREA
-# ============================================================
-
-def contar_perguntas_ativas_area(
-    area_id: int
-) -> int:
-    """
-    Retorna a quantidade de perguntas ativas
-    vinculadas direta ou indiretamente à área.
-    """
-
-    _validar_id(
-        area_id,
-        "ID da área"
-    )
-
-
+def contar_perguntas_ativas_area(area_id: int) -> int:
+    """Conta perguntas ativas ligadas diretamente à área ou às suas subáreas."""
+    _validar_id(area_id, "ID da área")
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
             """
             SELECT COUNT(*) AS quantidade
-
             FROM perguntas p
-
             WHERE p.ativa = 1
-
               AND (
-
                     p.area_tecnica_id = ?
-
-                    OR
-
-                    p.subarea_tecnica_id IN (
-
-                        SELECT
-                            s.id
-
+                    OR p.subarea_tecnica_id IN (
+                        SELECT s.id
                         FROM subareas_tecnicas s
-
-                        WHERE
-                            s.area_tecnica_id = ?
-
+                        WHERE s.area_tecnica_id = ?
                     )
-
               )
             """,
-            (
-                area_id,
-                area_id
-            )
+            (area_id, area_id)
         )
 
-
-        registro = cursor.fetchone()
-
-
-        return int(
-            registro[
-                "quantidade"
-            ]
-        )
-
-
+        return int(cursor.fetchone()["quantidade"])
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# INATIVAR ÁREA
-# ============================================================
-
-def inativar_area_tecnica(
-    area_id: int
-) -> bool:
-    """
-    Inativa uma área técnica.
-
-    A operação é bloqueada quando existem
-    perguntas ativas vinculadas à área ou
-    às suas subáreas.
-    """
-
-    _validar_id(
-        area_id,
-        "ID da área"
-    )
-
-
+def inativar_area_tecnica(area_id: int) -> bool:
+    """Inativa uma área somente quando não existem perguntas ativas vinculadas a ela."""
+    _validar_id(area_id, "ID da área")
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
+        cursor.execute("BEGIN IMMEDIATE")
         cursor.execute(
             """
-            BEGIN IMMEDIATE
-            """
-        )
-
-
-        cursor.execute(
-            """
-            SELECT
-
-                id,
-                ativo
-
+            SELECT id, ativo
             FROM areas_tecnicas
-
             WHERE id = ?
             """,
-            (
-                area_id,
-            )
+            (area_id,)
         )
-
-
         registro = cursor.fetchone()
-
 
         if registro is None:
-
             conexao.rollback()
-
             return False
 
-
-        if not bool(
-            registro[
-                "ativo"
-            ]
-        ):
-
+        # Uma área já inativa não precisa ser alterada novamente.
+        if not bool(registro["ativo"]):
             conexao.commit()
-
             return True
 
-
+        # A consulta considera perguntas da própria área e de qualquer subárea dela.
         cursor.execute(
             """
             SELECT COUNT(*) AS quantidade
-
             FROM perguntas p
-
             WHERE p.ativa = 1
-
               AND (
-
                     p.area_tecnica_id = ?
-
-                    OR
-
-                    p.subarea_tecnica_id IN (
-
-                        SELECT
-                            s.id
-
+                    OR p.subarea_tecnica_id IN (
+                        SELECT s.id
                         FROM subareas_tecnicas s
-
-                        WHERE
-                            s.area_tecnica_id = ?
-
+                        WHERE s.area_tecnica_id = ?
                     )
-
               )
             """,
-            (
-                area_id,
-                area_id
-            )
+            (area_id, area_id)
         )
-
-
-        quantidade = int(
-            cursor.fetchone()[
-                "quantidade"
-            ]
-        )
-
+        quantidade = int(cursor.fetchone()["quantidade"])
 
         if quantidade > 0:
+            raise ValueError("A área não pode ser inativada porque possui perguntas ativas vinculadas.")
 
-            raise ValueError(
-                "A área não pode ser inativada "
-                "porque possui perguntas ativas "
-                "vinculadas."
-            )
-
-
-        cursor.execute(
-            """
-            UPDATE areas_tecnicas
-
-            SET ativo = 0
-
-            WHERE id = ?
-            """,
-            (
-                area_id,
-            )
-        )
-
-
+        cursor.execute("UPDATE areas_tecnicas SET ativo = 0 WHERE id = ?", (area_id,))
         conexao.commit()
-
-
         return True
-
-
-    except (
-        sqlite3.Error,
-        ValueError
-    ):
-
+    except (sqlite3.Error, ValueError):
         conexao.rollback()
-
         raise
-
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# ATIVAR ÁREA
-# ============================================================
-
-def ativar_area_tecnica(
-    area_id: int
-) -> bool:
-    """
-    Ativa uma área técnica anteriormente
-    inativada.
-    """
-
-    _validar_id(
-        area_id,
-        "ID da área"
-    )
-
-
+def ativar_area_tecnica(area_id: int) -> bool:
+    """Ativa uma área existente e garante que sua subárea Geral esteja cadastrada."""
+    _validar_id(area_id, "ID da área")
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
-        cursor.execute(
-            """
-            BEGIN IMMEDIATE
-            """
-        )
-
-
-        cursor.execute(
-            """
-            SELECT id
-
-            FROM areas_tecnicas
-
-            WHERE id = ?
-            """,
-            (
-                area_id,
-            )
-        )
-
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT id FROM areas_tecnicas WHERE id = ?", (area_id,))
 
         if cursor.fetchone() is None:
-
             conexao.rollback()
-
             return False
 
-
-        # ----------------------------------------------------
-        # GARANTIR QUE A SUBÁREA GERAL EXISTA
-        # ----------------------------------------------------
-
+        # Bancos antigos podem não possuir a subárea Geral, por isso ela é conferida aqui.
         cursor.execute(
             """
             SELECT id
-
             FROM subareas_tecnicas
-
-            WHERE area_tecnica_id = ?
-              AND eh_geral = 1
-
+            WHERE area_tecnica_id = ? AND eh_geral = 1
             LIMIT 1
             """,
-            (
-                area_id,
-            )
+            (area_id,)
         )
-
-
         geral = cursor.fetchone()
 
-
         if geral is None:
-
             cursor.execute(
                 """
                 INSERT INTO subareas_tecnicas (
-
-                    area_tecnica_id,
-                    nome,
-                    descricao,
-                    eh_geral,
-                    ativo,
-                    ordem
-
+                    area_tecnica_id, nome, descricao, eh_geral, ativo, ordem
                 )
-
-                VALUES (
-                    ?,
-                    'Geral',
-                    ?,
-                    1,
-                    1,
-                    1
-                )
+                VALUES (?, 'Geral', ?, 1, 1, 1)
                 """,
-                (
-                    area_id,
-
-                    (
-                        "Subárea padrão destinada "
-                        "a perguntas gerais da área."
-                    )
-                )
+                (area_id, "Subárea padrão destinada a perguntas gerais da área.")
             )
 
-
-        cursor.execute(
-            """
-            UPDATE areas_tecnicas
-
-            SET ativo = 1
-
-            WHERE id = ?
-            """,
-            (
-                area_id,
-            )
-        )
-
-
+        cursor.execute("UPDATE areas_tecnicas SET ativo = 1 WHERE id = ?", (area_id,))
         conexao.commit()
-
-
         return True
-
-
     except sqlite3.Error:
-
         conexao.rollback()
-
         raise
-
-
     finally:
-
         conexao.close()

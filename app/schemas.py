@@ -1,39 +1,20 @@
-"""
-schemas.py
+"""Schemas Pydantic usados para validar dados recebidos e devolvidos pela API."""
 
-Schemas Pydantic utilizados pela API do
-Simulador de Entrevistas.
-
-Versão: 0.5
-"""
-
-from typing import Optional
-
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    EmailStr,
-    Field
-)
-
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 # ============================================================
 # AUTENTICAÇÃO
 # ============================================================
 
 class LoginRequest(BaseModel):
-
+    # Recebe e valida os dados enviados no login.
     email: EmailStr
-
-    senha: str = Field(
-        min_length=8
-    )
+    senha: str = Field(min_length=8)
 
 
 class TokenResponse(BaseModel):
-
+    # Define os dados devolvidos depois de um login válido.
     access_token: str
-
     token_type: str = "bearer"
 
 
@@ -42,63 +23,39 @@ class TokenResponse(BaseModel):
 # ============================================================
 
 class UsuarioCriar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=150
-    )
-
+    # Valida os dados usados para criar um estudante.
+    nome: str = Field(min_length=2, max_length=150)
     email: EmailStr
-
-    senha: str = Field(
-        min_length=8,
-        max_length=128
-    )
+    senha: str = Field(min_length=8, max_length=128)
 
 
 class UsuarioAtualizar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=150
-    )
-
+    # Valida os dados que podem ser alterados no cadastro do usuário.
+    nome: str = Field(min_length=2, max_length=150)
     email: EmailStr
 
 
 class UsuarioResposta(BaseModel):
-
-    model_config = ConfigDict(
-        from_attributes=True
-    )
+    # Define os dados de usuário que podem ser devolvidos pela API.
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
-
     nome: str
-
     email: str
-
     perfil: str
-
     ativo: bool
-
-    data_criacao: Optional[str] = None
-
-    ultimo_acesso: Optional[str] = None
+    data_criacao: str | None = None
+    ultimo_acesso: str | None = None
 
 
 class AlterarSenhaRequest(BaseModel):
-
+    # Valida a senha atual e a nova senha enviadas pelo usuário.
     senha_atual: str
-
-    nova_senha: str = Field(
-        min_length=8,
-        max_length=128
-    )
+    nova_senha: str = Field(min_length=8, max_length=128)
 
 
 class AlterarPerfilRequest(BaseModel):
-
+    # Recebe o novo perfil que será validado pela regra do serviço.
     perfil: str
 
 
@@ -107,46 +64,29 @@ class AlterarPerfilRequest(BaseModel):
 # ============================================================
 
 class TipoEntrevistaCriar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=100
-    )
+    # Valida o nome de um novo tipo de entrevista.
+    nome: str = Field(min_length=2, max_length=100)
 
 
 class TipoEntrevistaAtualizar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=100
-    )
+    # Valida o nome usado ao editar um tipo de entrevista.
+    nome: str = Field(min_length=2, max_length=100)
 
 
 class TipoEntrevistaResposta(BaseModel):
-
+    # Define os dados básicos devolvidos para um tipo de entrevista.
     id: int
-
     nome: str
-
     ativo: bool
 
 
 class TipoEntrevistaDetalheResposta(BaseModel):
-
+    # Acrescenta informações de uso ao detalhe de um tipo de entrevista.
     id: int
-
     nome: str
-
     ativo: bool
-
-    quantidade_perguntas: int = Field(
-        ge=0
-    )
-
-    quantidade_entrevistas: int = Field(
-        ge=0
-    )
-
+    quantidade_perguntas: int = Field(ge=0)
+    quantidade_entrevistas: int = Field(ge=0)
     em_uso: bool
 
 
@@ -155,60 +95,33 @@ class TipoEntrevistaDetalheResposta(BaseModel):
 # ============================================================
 
 class CompetenciaCriar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=100
-    )
-
-    descricao: Optional[str] = Field(
-        default=None,
-        max_length=1000
-    )
+    # Valida os dados usados no cadastro de uma competência.
+    nome: str = Field(min_length=2, max_length=100)
+    descricao: str | None = Field(default=None, max_length=1000)
 
 
 class CompetenciaAtualizar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=100
-    )
-
-    descricao: Optional[str] = Field(
-        default=None,
-        max_length=1000
-    )
+    # Valida os dados usados para editar uma competência.
+    nome: str = Field(min_length=2, max_length=100)
+    descricao: str | None = Field(default=None, max_length=1000)
 
 
 class CompetenciaResposta(BaseModel):
-
+    # Define os dados básicos devolvidos para uma competência.
     id: int
-
     nome: str
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     ativo: bool
 
 
 class CompetenciaDetalheResposta(BaseModel):
-
+    # Mostra os dados da competência e quantas perguntas a utilizam.
     id: int
-
     nome: str
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     ativo: bool
-
-    quantidade_perguntas: int = Field(
-        ge=0
-    )
-
-    quantidade_perguntas_ativas: int = Field(
-        ge=0
-    )
-
+    quantidade_perguntas: int = Field(ge=0)
+    quantidade_perguntas_ativas: int = Field(ge=0)
     em_uso: bool
 
 
@@ -217,98 +130,51 @@ class CompetenciaDetalheResposta(BaseModel):
 # ============================================================
 
 class CriterioCriar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=150
-    )
-
-    descricao: Optional[str] = Field(
-        default=None,
-        max_length=2000
-    )
-
-    peso: float = Field(
-        gt=0
-    )
-
-    ordem: Optional[int] = Field(
-        default=None,
-        gt=0
-    )
+    # Valida os dados usados para criar um critério de avaliação.
+    nome: str = Field(min_length=2, max_length=150)
+    descricao: str | None = Field(default=None, max_length=2000)
+    peso: float = Field(gt=0)
+    ordem: int | None = Field(default=None, gt=0)
 
 
 class CriterioAtualizar(BaseModel):
-
-    nome: str = Field(
-        min_length=2,
-        max_length=150
-    )
-
-    descricao: Optional[str] = Field(
-        default=None,
-        max_length=2000
-    )
-
-    peso: float = Field(
-        gt=0
-    )
-
-    ordem: Optional[int] = Field(
-        default=None,
-        gt=0
-    )
+    # Valida os dados usados para editar um critério de avaliação.
+    nome: str = Field(min_length=2, max_length=150)
+    descricao: str | None = Field(default=None, max_length=2000)
+    peso: float = Field(gt=0)
+    ordem: int | None = Field(default=None, gt=0)
 
 
 class CriterioResposta(BaseModel):
-
+    # Define os dados básicos devolvidos para um critério.
     id: int
-
     nome: str
-
-    descricao: Optional[str] = None
-
+    descricao: str | None = None
     peso: float
-
-    ordem: Optional[int] = None
-
+    ordem: int | None = None
     ativo: bool
 
 
-class CriterioDetalheResposta(
-    CriterioResposta
-):
-
-    quantidade_avaliacoes: int = Field(
-        ge=0
-    )
-
+class CriterioDetalheResposta(CriterioResposta):
+    # Acrescenta ao critério a quantidade de avaliações que já o utilizaram.
+    quantidade_avaliacoes: int = Field(ge=0)
     em_uso: bool
 
 
 class PesoCriterioResumo(BaseModel):
-
+    # Mostra o peso e a participação percentual de um critério ativo.
     criterio_id: int
-
     criterio: str
-
     peso: float
-
     participacao_percentual: float
 
 
 class ResumoPesosResposta(BaseModel):
-
-    quantidade_criterios_ativos: int = Field(
-        ge=0
-    )
-
+    # Resume a configuração atual dos pesos dos critérios ativos.
+    quantidade_criterios_ativos: int = Field(ge=0)
     soma_pesos_ativos: float
-
     sistema_pronto_para_avaliar: bool
-
     pesos_somam_um: bool
-
     distribuicao: list[PesoCriterioResumo]
 
 
@@ -317,73 +183,40 @@ class ResumoPesosResposta(BaseModel):
 # ============================================================
 
 class PerguntaCriar(BaseModel):
-
+    # Valida os dados básicos usados para cadastrar uma pergunta.
     tipo_entrevista_id: int
-
     competencia_id: int
-
-    texto: str = Field(
-        min_length=3
-    )
-
-    exemplo_esperado: Optional[str] = None
-
-    ordem: Optional[int] = None
-
-    peso: float = Field(
-        default=1.0,
-        gt=0
-    )
-
+    texto: str = Field(min_length=3)
+    exemplo_esperado: str | None = None
+    ordem: int | None = None
+    peso: float = Field(default=1.0, gt=0)
     usa_star: bool = False
 
 
 class PerguntaResposta(BaseModel):
-
-    model_config = ConfigDict(
-        from_attributes=True
-    )
+    # Define os dados de uma pergunta devolvida pela API.
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
-
-    tipo_entrevista_id: Optional[int] = None
-
-    competencia_id: Optional[int] = None
-
+    tipo_entrevista_id: int | None = None
+    competencia_id: int | None = None
     texto: str
-
-    exemplo_esperado: Optional[str] = None
-
-    ordem: Optional[int] = None
-
+    exemplo_esperado: str | None = None
+    ordem: int | None = None
     ativa: bool
-
     peso: float
-
     usa_star: bool
-
-    data_criacao: Optional[str] = None
+    data_criacao: str | None = None
 
 
 class PerguntaAtualizar(BaseModel):
-
+    # Valida os dados básicos usados para editar uma pergunta.
     tipo_entrevista_id: int
-
     competencia_id: int
-
-    texto: str = Field(
-        min_length=3
-    )
-
-    exemplo_esperado: Optional[str] = None
-
-    ordem: Optional[int] = None
-
-    peso: float = Field(
-        default=1.0,
-        gt=0
-    )
-
+    texto: str = Field(min_length=3)
+    exemplo_esperado: str | None = None
+    ordem: int | None = None
+    peso: float = Field(default=1.0, gt=0)
     usa_star: bool = False
 
 
@@ -392,31 +225,22 @@ class PerguntaAtualizar(BaseModel):
 # ============================================================
 
 class EntrevistaCriar(BaseModel):
-
+    # Recebe o tipo de entrevista usado no formato básico do schema.
     tipo_entrevista_id: int
 
 
 class EntrevistaResposta(BaseModel):
-
-    model_config = ConfigDict(
-        from_attributes=True
-    )
+    # Define os dados básicos de uma entrevista devolvida pela API.
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
-
     usuario_id: int
-
-    tipo_entrevista_id: Optional[int] = None
-
-    data_inicio: Optional[str] = None
-
-    data_fim: Optional[str] = None
-
+    tipo_entrevista_id: int | None = None
+    data_inicio: str | None = None
+    data_fim: str | None = None
     status: str
-
-    pontuacao_final: Optional[float] = None
-
-    observacoes: Optional[str] = None
+    pontuacao_final: float | None = None
+    observacoes: str | None = None
 
 
 # ============================================================
@@ -424,33 +248,19 @@ class EntrevistaResposta(BaseModel):
 # ============================================================
 
 class RespostaCriar(BaseModel):
-
+    # Valida uma resposta enviada pelo estudante durante a entrevista.
     pergunta_id: int
-
-    texto_resposta: str = Field(
-        min_length=1
-    )
-
-    tempo_resposta: Optional[int] = Field(
-        default=None,
-        ge=0
-    )
+    texto_resposta: str = Field(min_length=1)
+    tempo_resposta: int | None = Field(default=None, ge=0)
 
 
 class RespostaDetalhe(BaseModel):
-
-    model_config = ConfigDict(
-        from_attributes=True
-    )
+    # Define os dados de uma resposta devolvida pela API.
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
-
     entrevista_id: int
-
     pergunta_id: int
-
     texto_resposta: str
-
-    tempo_resposta: Optional[int] = None
-
-    data_resposta: Optional[str] = None
+    tempo_resposta: int | None = None
+    data_resposta: str | None = None

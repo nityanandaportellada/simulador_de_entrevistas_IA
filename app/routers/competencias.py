@@ -1,288 +1,93 @@
-"""
-routers/competencias.py
+"""Rotas usadas para consultar e administrar as competências do simulador."""
 
-Endpoints relacionados às competências
-do Simulador de Entrevistas.
-
-Versão: 0.2
-
-Responsabilidades:
-
-- listar competências;
-- consultar competências;
-- consultar detalhes administrativos;
-- cadastrar competências;
-- atualizar competências;
-- ativar competências;
-- inativar competências.
-
-Operações de manutenção são exclusivas
-do administrador.
-"""
-
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    status
-)
-
-from ..models import Usuario
-
-from ..schemas import (
-    CompetenciaCriar,
-    CompetenciaAtualizar,
-    CompetenciaResposta,
-    CompetenciaDetalheResposta
-)
-
-from ..security import (
-    obter_usuario_atual,
-    obter_administrador_atual
-)
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..competencias import (
-    cadastrar_competencia,
-    listar_competencias,
-    buscar_competencia,
-    editar_competencia,
     ativar_competencia,
+    buscar_competencia,
+    cadastrar_competencia,
+    editar_competencia,
     inativar_competencia,
+    listar_competencias,
     obter_detalhes_competencia
 )
+from ..models import Usuario
+from ..schemas import CompetenciaAtualizar, CompetenciaCriar, CompetenciaDetalheResposta, CompetenciaResposta
+from ..security import obter_administrador_atual, obter_usuario_atual
+
+# Agrupa as rotas relacionadas às competências.
+router = APIRouter(prefix="/competencias", tags=["Competências"])
 
 
-# ============================================================
-# ROUTER
-# ============================================================
-
-router = APIRouter(
-    prefix="/competencias",
-    tags=["Competências"]
-)
+@router.get("", response_model=list[CompetenciaResposta])
+def listar(somente_ativas: bool = False, usuario: Usuario = Depends(obter_usuario_atual)):
+    """Lista as competências para qualquer usuário autenticado."""
+    # A interface pode solicitar somente as competências que estão disponíveis.
+    return listar_competencias(somente_ativas=somente_ativas)
 
 
-# ============================================================
-# LISTAR COMPETÊNCIAS
-# ============================================================
-
-@router.get(
-    "",
-    response_model=list[CompetenciaResposta]
-)
-def listar(
-    somente_ativas: bool = False,
-    usuario: Usuario = Depends(
-        obter_usuario_atual
-    )
-):
-    """
-    Lista as competências cadastradas.
-
-    Usuários autenticados podem consultar
-    as competências.
-
-    O parâmetro somente_ativas permite retornar
-    somente competências disponíveis.
-    """
-
-    return listar_competencias(
-        somente_ativas=somente_ativas
-    )
-
-
-# ============================================================
-# CONSULTAR COMPETÊNCIA
-# ============================================================
-
-@router.get(
-    "/{competencia_id}",
-    response_model=CompetenciaResposta
-)
-def consultar(
-    competencia_id: int,
-    usuario: Usuario = Depends(
-        obter_usuario_atual
-    )
-):
-    """
-    Consulta uma competência pelo ID.
-    """
-
+@router.get("/{competencia_id}", response_model=CompetenciaResposta)
+def consultar(competencia_id: int, usuario: Usuario = Depends(obter_usuario_atual)):
+    """Consulta uma competência pelo ID informado."""
     try:
-
-        competencia = buscar_competencia(
-            competencia_id
-        )
-
+        competencia = buscar_competencia(competencia_id)
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
-
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
     if competencia is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Competência não encontrada."
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competência não encontrada.")
 
     return competencia
 
 
-# ============================================================
-# DETALHES ADMINISTRATIVOS
-# ============================================================
-
-@router.get(
-    "/{competencia_id}/detalhes",
-    response_model=CompetenciaDetalheResposta
-)
-def consultar_detalhes(
-    competencia_id: int,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Retorna informações administrativas
-    da competência.
-
-    Inclui:
-
-    - descrição;
-    - quantidade total de perguntas;
-    - quantidade de perguntas ativas;
-    - informação sobre utilização.
-
-    Operação exclusiva do administrador.
-    """
-
+@router.get("/{competencia_id}/detalhes", response_model=CompetenciaDetalheResposta)
+def consultar_detalhes(competencia_id: int, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Mostra informações administrativas sobre o uso de uma competência."""
     try:
-
-        competencia = obter_detalhes_competencia(
-            competencia_id
-        )
-
+        competencia = obter_detalhes_competencia(competencia_id)
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
-
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
     if competencia is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Competência não encontrada."
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competência não encontrada.")
 
     return competencia
 
 
-# ============================================================
-# CADASTRAR COMPETÊNCIA
-# ============================================================
-
-@router.post(
-    "",
-    response_model=CompetenciaResposta,
-    status_code=status.HTTP_201_CREATED
-)
-def cadastrar(
-    dados: CompetenciaCriar,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Cadastra uma nova competência.
-
-    Operação exclusiva do administrador.
-    """
-
+@router.post("", response_model=CompetenciaResposta, status_code=status.HTTP_201_CREATED)
+def cadastrar(dados: CompetenciaCriar, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Cadastra uma nova competência quando o usuário é administrador."""
     try:
-
-        competencia_id = cadastrar_competencia(
-            nome=dados.nome,
-            descricao=dados.descricao
-        )
-
-
-        competencia = buscar_competencia(
-            competencia_id
-        )
-
+        # Cria a competência e depois busca o registro para devolver os dados completos.
+        competencia_id = cadastrar_competencia(nome=dados.nome, descricao=dados.descricao)
+        competencia = buscar_competencia(competencia_id)
 
         if competencia is None:
-
             raise HTTPException(
-                status_code=(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR
-                ),
-                detail=(
-                    "A competência foi cadastrada, "
-                    "mas não pôde ser recuperada."
-                )
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="A competência foi cadastrada, mas não pôde ser recuperada."
             )
 
-
         return competencia
-
-
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
 
-# ============================================================
-# ATUALIZAR COMPETÊNCIA
-# ============================================================
-
-@router.put(
-    "/{competencia_id}",
-    response_model=CompetenciaResposta
-)
+@router.put("/{competencia_id}", response_model=CompetenciaResposta)
 def atualizar(
     competencia_id: int,
     dados: CompetenciaAtualizar,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
+    administrador: Usuario = Depends(obter_administrador_atual)
 ):
-    """
-    Atualiza o nome e a descrição
-    de uma competência.
-
-    O status ativo/inativo é preservado.
-
-    Operação exclusiva do administrador.
-    """
-
+    """Atualiza o nome e a descrição da competência sem mudar seu status."""
     try:
-
-        competencia = buscar_competencia(
-            competencia_id
-        )
-
+        # Confirma a existência antes de tentar editar o registro.
+        competencia = buscar_competencia(competencia_id)
 
         if competencia is None:
-
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Competência não encontrada."
-            )
-
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competência não encontrada.")
 
         alterada = editar_competencia(
             competencia_id=competencia_id,
@@ -290,158 +95,53 @@ def atualizar(
             descricao=dados.descricao
         )
 
-
         if not alterada:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competência não encontrada.")
 
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Competência não encontrada."
-            )
-
-
-        competencia_atualizada = buscar_competencia(
-            competencia_id
-        )
-
-
-        return competencia_atualizada
-
-
+        return buscar_competencia(competencia_id)
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
 
-# ============================================================
-# INATIVAR COMPETÊNCIA
-# ============================================================
-
-@router.put(
-    "/{competencia_id}/inativar",
-    response_model=CompetenciaResposta
-)
-def inativar(
-    competencia_id: int,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Inativa uma competência.
-
-    O registro permanece no banco,
-    preservando o histórico.
-
-    Operação exclusiva do administrador.
-    """
-
+@router.put("/{competencia_id}/inativar", response_model=CompetenciaResposta)
+def inativar(competencia_id: int, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Inativa uma competência sem excluir o registro ou seu histórico."""
     try:
-
-        competencia = buscar_competencia(
-            competencia_id
-        )
-
+        competencia = buscar_competencia(competencia_id)
 
         if competencia is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competência não encontrada.")
 
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Competência não encontrada."
-            )
-
-
-        alterada = inativar_competencia(
-            competencia_id
-        )
-
+        alterada = inativar_competencia(competencia_id)
 
         if not alterada:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Não foi possível inativar a competência.")
 
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Não foi possível inativar "
-                    "a competência."
-                )
-            )
-
-
-        return buscar_competencia(
-            competencia_id
-        )
-
-
+        return buscar_competencia(competencia_id)
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
 
-# ============================================================
-# ATIVAR COMPETÊNCIA
-# ============================================================
-
-@router.put(
-    "/{competencia_id}/ativar",
-    response_model=CompetenciaResposta
-)
-def ativar(
-    competencia_id: int,
-    administrador: Usuario = Depends(
-        obter_administrador_atual
-    )
-):
-    """
-    Reativa uma competência anteriormente
-    inativada.
-
-    Operação exclusiva do administrador.
-    """
-
+@router.put("/{competencia_id}/ativar", response_model=CompetenciaResposta)
+def ativar(competencia_id: int, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Reativa uma competência que estava inativa."""
     try:
-
-        competencia = buscar_competencia(
-            competencia_id
-        )
-
+        competencia = buscar_competencia(competencia_id)
 
         if competencia is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competência não encontrada.")
 
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Competência não encontrada."
-            )
-
-
-        alterada = ativar_competencia(
-            competencia_id
-        )
-
+        alterada = ativar_competencia(competencia_id)
 
         if not alterada:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Não foi possível ativar a competência.")
 
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Não foi possível ativar "
-                    "a competência."
-                )
-            )
-
-
-        return buscar_competencia(
-            competencia_id
-        )
-
-
+        return buscar_competencia(competencia_id)
+    except HTTPException:
+        raise
     except ValueError as erro:
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(erro)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))

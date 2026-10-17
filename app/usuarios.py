@@ -1,377 +1,147 @@
-"""
-usuarios.py
-
-Módulo responsável pelo gerenciamento dos usuários
-do Simulador de Entrevistas.
-
-Versão: 0.3
-
-Responsabilidades:
-
-- cadastrar usuários;
-- cadastrar o primeiro administrador;
-- buscar usuários;
-- listar usuários;
-- atualizar dados cadastrais;
-- alterar perfil;
-- ativar usuários;
-- inativar usuários;
-- verificar existência de e-mail;
-- verificar existência de administrador;
-- contar administradores ativos;
-- proteger o último administrador ativo;
-- registrar último acesso.
-
-IMPORTANTE:
-
-Este módulo NÃO recebe nem armazena senhas em texto puro.
-
-O hash da senha deve ser produzido pelo módulo auth.py
-antes do cadastro ou da alteração da senha.
-
-REGRAS ADMINISTRATIVAS:
-
-- deve existir pelo menos um administrador ativo;
-- o último administrador ativo não pode perder
-  o perfil de administrador;
-- o último administrador ativo não pode ser inativado;
-- a verificação ocorre dentro de transação para evitar
-  problemas de concorrência.
-"""
+"""Funções responsáveis pelo cadastro e gerenciamento dos usuários."""
 
 import sqlite3
-
 from datetime import datetime
 
-
 try:
-
     from .database import conectar_banco
-
     from .models import Usuario
-
-
 except ImportError:
-
     from database import conectar_banco
-
     from models import Usuario
 
-
-# ============================================================
-# PERFIS PERMITIDOS
-# ============================================================
-
-PERFIS_PERMITIDOS = (
-    "estudante",
-    "administrador"
-)
+# Perfis que podem ser gravados na tabela de usuários.
+PERFIS_PERMITIDOS = ("estudante", "administrador")
 
 
-# ============================================================
-# EXCEÇÕES ESPECÍFICAS
-# ============================================================
-
-class AdministradorJaExisteError(
-    ValueError
-):
-    """
-    Indica que o bootstrap administrativo
-    não pode mais ser executado porque
-    já existe administrador cadastrado.
-    """
-
+class AdministradorJaExisteError(ValueError):
+    """Indica que o primeiro administrador já foi criado e o bootstrap não pode ser repetido."""
     pass
 
 
-# ============================================================
-# NORMALIZAR E-MAIL
-# ============================================================
-
-def normalizar_email(
-    email: str
-) -> str:
-    """
-    Remove espaços e converte o e-mail
-    para letras minúsculas.
-    """
-
+def normalizar_email(email: str) -> str:
+    """Remove espaços do e-mail e converte o texto para letras minúsculas."""
+    # O e-mail precisa existir e precisa ser um texto.
     if email is None:
+        raise ValueError("O e-mail é obrigatório.")
 
-        raise ValueError(
-            "O e-mail é obrigatório."
-        )
+    if not isinstance(email, str):
+        raise ValueError("O e-mail deve ser um texto.")
 
-
-    if not isinstance(
-        email,
-        str
-    ):
-
-        raise ValueError(
-            "O e-mail deve ser um texto."
-        )
-
-
+    # A normalização evita diferenças causadas por espaços ou letras maiúsculas.
     email = email.strip().lower()
 
-
     if not email:
-
-        raise ValueError(
-            "O e-mail é obrigatório."
-        )
-
+        raise ValueError("O e-mail é obrigatório.")
 
     return email
 
 
-# ============================================================
-# VALIDAR NOME
-# ============================================================
-
-def _validar_nome(
-    nome: str
-) -> str:
-    """
-    Valida e normaliza o nome do usuário.
-    """
-
+def _validar_nome(nome: str) -> str:
+    """Valida o nome do usuário e devolve o texto sem espaços nas extremidades."""
     if nome is None:
+        raise ValueError("O nome é obrigatório.")
 
-        raise ValueError(
-            "O nome é obrigatório."
-        )
-
-
-    if not isinstance(
-        nome,
-        str
-    ):
-
-        raise ValueError(
-            "O nome deve ser um texto."
-        )
-
+    if not isinstance(nome, str):
+        raise ValueError("O nome deve ser um texto.")
 
     nome = nome.strip()
 
-
     if not nome:
-
-        raise ValueError(
-            "O nome é obrigatório."
-        )
-
+        raise ValueError("O nome é obrigatório.")
 
     return nome
 
 
-# ============================================================
-# VALIDAR ID
-# ============================================================
-
-def _validar_usuario_id(
-    usuario_id: int
-) -> None:
-    """
-    Valida o ID de um usuário.
-    """
-
-    if not isinstance(
-        usuario_id,
-        int
-    ):
-
-        raise ValueError(
-            "O ID do usuário deve ser um número inteiro."
-        )
-
+def _validar_usuario_id(usuario_id: int) -> None:
+    """Verifica se o ID informado é um número inteiro maior que zero."""
+    if not isinstance(usuario_id, int):
+        raise ValueError("O ID do usuário deve ser um número inteiro.")
 
     if usuario_id <= 0:
-
-        raise ValueError(
-            "O ID do usuário é inválido."
-        )
+        raise ValueError("O ID do usuário é inválido.")
 
 
-# ============================================================
-# VERIFICAR E-MAIL
-# ============================================================
-
-def email_existe(
-    email: str,
-    ignorar_usuario_id: int | None = None
-) -> bool:
-    """
-    Verifica se determinado e-mail já está
-    cadastrado no sistema.
-
-    O parâmetro ignorar_usuario_id é utilizado
-    durante alterações cadastrais.
-    """
-
-    email = normalizar_email(
-        email
-    )
-
-
+def email_existe(email: str, ignorar_usuario_id: int | None = None) -> bool:
+    """Verifica se um e-mail já está cadastrado, podendo ignorar um usuário durante a edição."""
+    email = normalizar_email(email)
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
+        # No cadastro é necessário procurar o e-mail em todos os usuários.
         if ignorar_usuario_id is None:
-
             cursor.execute(
                 """
                 SELECT 1
-
                 FROM usuarios
-
                 WHERE LOWER(email) = LOWER(?)
-
                 LIMIT 1
                 """,
-                (
-                    email,
-                )
+                (email,)
             )
-
-
         else:
-
-            _validar_usuario_id(
-                ignorar_usuario_id
-            )
-
+            # Na edição o próprio usuário deve ser ignorado na verificação.
+            _validar_usuario_id(ignorar_usuario_id)
 
             cursor.execute(
                 """
                 SELECT 1
-
                 FROM usuarios
-
-                WHERE LOWER(email) = LOWER(?)
-
-                  AND id <> ?
-
+                WHERE LOWER(email) = LOWER(?) AND id <> ?
                 LIMIT 1
                 """,
-                (
-                    email,
-                    ignorar_usuario_id
-                )
+                (email, ignorar_usuario_id)
             )
 
-
-        return (
-            cursor.fetchone()
-            is not None
-        )
-
+        return cursor.fetchone() is not None
 
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# VERIFICAR SE EXISTE ADMINISTRADOR
-# ============================================================
-
 def administrador_existe() -> bool:
-    """
-    Verifica se existe pelo menos um usuário
-    com perfil de administrador.
-
-    Considera administradores ativos ou inativos.
-
-    Um administrador inativo não deve fazer
-    o sistema retornar ao estado de bootstrap.
-    """
-
+    """Verifica se já existe algum administrador, mesmo que ele esteja inativo."""
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
+        # Administradores inativos também contam para impedir um novo bootstrap.
         cursor.execute(
             """
             SELECT 1
-
             FROM usuarios
-
             WHERE perfil = 'administrador'
-
             LIMIT 1
             """
         )
 
-
-        return (
-            cursor.fetchone()
-            is not None
-        )
-
+        return cursor.fetchone() is not None
 
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# CONTAR ADMINISTRADORES ATIVOS
-# ============================================================
-
 def contar_administradores_ativos() -> int:
-    """
-    Retorna a quantidade de administradores ativos.
-
-    Esta função é útil para auditoria,
-    testes e validações administrativas.
-    """
-
+    """Retorna quantos administradores estão ativos no sistema."""
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
             """
             SELECT COUNT(*) AS quantidade
-
             FROM usuarios
-
-            WHERE perfil = 'administrador'
-
-              AND ativo = 1
+            WHERE perfil = 'administrador' AND ativo = 1
             """
         )
 
-
         registro = cursor.fetchone()
-
-
-        return int(
-            registro["quantidade"]
-        )
-
+        return int(registro["quantidade"])
 
     finally:
-
         conexao.close()
 
-
-# ============================================================
-# CADASTRAR USUÁRIO
-# ============================================================
 
 def cadastrar_usuario(
     nome: str,
@@ -379,1174 +149,487 @@ def cadastrar_usuario(
     senha_hash: str,
     perfil: str = "estudante"
 ) -> int:
-    """
-    Cadastra um novo usuário.
-
-    A senha recebida por esta função deve estar
-    previamente protegida por hash.
-
-    Retorna o ID do usuário criado.
-    """
-
-    nome = _validar_nome(
-        nome
-    )
-
-
-    email = normalizar_email(
-        email
-    )
-
+    """Cadastra um usuário com a senha já transformada em hash e devolve o novo ID."""
+    # Valida os dados antes de abrir a operação de gravação.
+    nome = _validar_nome(nome)
+    email = normalizar_email(email)
 
     if not senha_hash:
-
-        raise ValueError(
-            "O hash da senha é obrigatório."
-        )
-
+        raise ValueError("O hash da senha é obrigatório.")
 
     if perfil not in PERFIS_PERMITIDOS:
+        raise ValueError("Perfil de usuário inválido.")
 
-        raise ValueError(
-            "Perfil de usuário inválido."
-        )
-
-
-    if email_existe(
-        email
-    ):
-
-        raise ValueError(
-            "Já existe um usuário cadastrado "
-            "com este e-mail."
-        )
-
+    if email_existe(email):
+        raise ValueError("Já existe um usuário cadastrado com este e-mail.")
 
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
+        # Grava o usuário como ativo. A senha em texto puro nunca chega a esta função.
         cursor.execute(
             """
-            INSERT INTO usuarios (
-                nome,
-                email,
-                senha_hash,
-                perfil,
-                ativo
-            )
-
+            INSERT INTO usuarios (nome, email, senha_hash, perfil, ativo)
             VALUES (?, ?, ?, ?, 1)
             """,
-            (
-                nome,
-                email,
-                senha_hash,
-                perfil
-            )
+            (nome, email, senha_hash, perfil)
         )
 
-
-        usuario_id = (
-            cursor.lastrowid
-        )
-
-
+        usuario_id = cursor.lastrowid
         conexao.commit()
-
 
         return usuario_id
 
-
     except sqlite3.IntegrityError as erro:
-
+        # A restrição UNIQUE do banco também protege contra e-mails duplicados.
         conexao.rollback()
-
 
         raise ValueError(
             "Não foi possível cadastrar o usuário. "
             "Verifique se o e-mail já está cadastrado."
         ) from erro
 
-
     except sqlite3.Error:
-
         conexao.rollback()
-
         raise
 
-
     finally:
-
         conexao.close()
 
-
-# ============================================================
-# CADASTRAR PRIMEIRO ADMINISTRADOR
-# ============================================================
 
 def cadastrar_primeiro_administrador(
     nome: str,
     email: str,
     senha_hash: str
 ) -> int:
-    """
-    Cadastra o primeiro administrador do sistema.
-
-    Esta função somente funciona enquanto não existir
-    nenhum administrador cadastrado.
-
-    A validação e a inserção são realizadas dentro
-    da mesma transação.
-
-    BEGIN IMMEDIATE impede que duas requisições
-    concorrentes criem simultaneamente dois
-    administradores durante o bootstrap.
-    """
-
-    nome = _validar_nome(
-        nome
-    )
-
-
-    email = normalizar_email(
-        email
-    )
-
+    """Cria o primeiro administrador somente quando ainda não existe outro administrador."""
+    nome = _validar_nome(nome)
+    email = normalizar_email(email)
 
     if not senha_hash:
-
-        raise ValueError(
-            "O hash da senha é obrigatório."
-        )
-
+        raise ValueError("O hash da senha é obrigatório.")
 
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
+        # BEGIN IMMEDIATE reserva a escrita enquanto a verificação e o cadastro são feitos.
+        # Isso evita que duas requisições criem dois primeiros administradores ao mesmo tempo.
+        cursor.execute("BEGIN IMMEDIATE")
 
-        # --------------------------------------------------------
-        # BLOQUEAR TRANSAÇÃO PARA ESCRITA
-        # --------------------------------------------------------
-
-        cursor.execute(
-            "BEGIN IMMEDIATE"
-        )
-
-
-        # --------------------------------------------------------
-        # VERIFICAR ADMINISTRADOR EXISTENTE
-        # --------------------------------------------------------
-
+        # Confere novamente dentro da mesma transação se já existe administrador.
         cursor.execute(
             """
             SELECT 1
-
             FROM usuarios
-
             WHERE perfil = 'administrador'
-
             LIMIT 1
             """
         )
 
-
-        if (
-            cursor.fetchone()
-            is not None
-        ):
-
+        if cursor.fetchone() is not None:
             raise AdministradorJaExisteError(
                 "Já existe um administrador cadastrado. "
                 "O bootstrap administrativo está desabilitado."
             )
 
-
-        # --------------------------------------------------------
-        # VERIFICAR E-MAIL
-        # --------------------------------------------------------
-
+        # O e-mail também precisa estar livre, mesmo que pertença a um estudante.
         cursor.execute(
             """
             SELECT 1
-
             FROM usuarios
-
             WHERE LOWER(email) = LOWER(?)
-
             LIMIT 1
             """,
-            (
-                email,
-            )
+            (email,)
         )
 
-
-        if (
-            cursor.fetchone()
-            is not None
-        ):
-
+        if cursor.fetchone() is not None:
             raise ValueError(
-                "Já existe um usuário cadastrado "
-                "com este e-mail."
+                "Já existe um usuário cadastrado com este e-mail."
             )
 
-
-        # --------------------------------------------------------
-        # CRIAR ADMINISTRADOR
-        # --------------------------------------------------------
-
+        # Cria o primeiro administrador já ativo.
         cursor.execute(
             """
-            INSERT INTO usuarios (
-                nome,
-                email,
-                senha_hash,
-                perfil,
-                ativo
-            )
-
+            INSERT INTO usuarios (nome, email, senha_hash, perfil, ativo)
             VALUES (?, ?, ?, 'administrador', 1)
             """,
-            (
-                nome,
-                email,
-                senha_hash
-            )
+            (nome, email, senha_hash)
         )
 
-
-        usuario_id = (
-            cursor.lastrowid
-        )
-
-
+        usuario_id = cursor.lastrowid
         conexao.commit()
-
 
         return usuario_id
 
-
-    except (
-        AdministradorJaExisteError,
-        ValueError
-    ):
-
+    except (AdministradorJaExisteError, ValueError):
         conexao.rollback()
-
         raise
-
 
     except sqlite3.IntegrityError as erro:
-
         conexao.rollback()
-
 
         raise ValueError(
-            "Não foi possível cadastrar "
-            "o primeiro administrador."
+            "Não foi possível cadastrar o primeiro administrador."
         ) from erro
 
-
     except sqlite3.Error:
-
         conexao.rollback()
-
         raise
 
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# BUSCAR USUÁRIO
-# ============================================================
-
-def buscar_usuario(
-    usuario_id: int
-) -> Usuario | None:
-    """
-    Busca um usuário pelo ID.
-    """
-
-    _validar_usuario_id(
-        usuario_id
-    )
-
-
+def buscar_usuario(usuario_id: int) -> Usuario | None:
+    """Busca um usuário pelo ID e devolve None quando ele não existe."""
+    _validar_usuario_id(usuario_id)
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
-            """
-            SELECT *
-
-            FROM usuarios
-
-            WHERE id = ?
-            """,
-            (
-                usuario_id,
-            )
+            "SELECT * FROM usuarios WHERE id = ?",
+            (usuario_id,)
         )
-
 
         registro = cursor.fetchone()
 
-
         if registro is None:
-
             return None
 
-
-        return _registro_para_usuario(
-            registro
-        )
-
+        return _registro_para_usuario(registro)
 
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# BUSCAR USUÁRIO PELO E-MAIL
-# ============================================================
-
-def buscar_usuario_por_email(
-    email: str
-) -> Usuario | None:
-    """
-    Busca um usuário pelo endereço de e-mail.
-    """
-
-    email = normalizar_email(
-        email
-    )
-
-
+def buscar_usuario_por_email(email: str) -> Usuario | None:
+    """Busca um usuário pelo e-mail e devolve None quando não encontra o cadastro."""
+    email = normalizar_email(email)
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
-            """
-            SELECT *
-
-            FROM usuarios
-
-            WHERE LOWER(email) = LOWER(?)
-            """,
-            (
-                email,
-            )
+            "SELECT * FROM usuarios WHERE LOWER(email) = LOWER(?)",
+            (email,)
         )
-
 
         registro = cursor.fetchone()
 
-
         if registro is None:
-
             return None
 
-
-        return _registro_para_usuario(
-            registro
-        )
-
+        return _registro_para_usuario(registro)
 
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# LISTAR USUÁRIOS
-# ============================================================
-
-def listar_usuarios(
-    somente_ativos: bool = False
-) -> list[Usuario]:
-    """
-    Lista os usuários cadastrados.
-
-    Quando somente_ativos for True,
-    retorna apenas usuários ativos.
-    """
-
+def listar_usuarios(somente_ativos: bool = False) -> list[Usuario]:
+    """Lista os usuários e permite retornar somente os que estão ativos."""
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         if somente_ativos:
-
             cursor.execute(
-                """
-                SELECT *
-
-                FROM usuarios
-
-                WHERE ativo = 1
-
-                ORDER BY nome, id
-                """
+                "SELECT * FROM usuarios WHERE ativo = 1 ORDER BY nome, id"
             )
-
-
         else:
-
             cursor.execute(
-                """
-                SELECT *
-
-                FROM usuarios
-
-                ORDER BY nome, id
-                """
+                "SELECT * FROM usuarios ORDER BY nome, id"
             )
-
 
         registros = cursor.fetchall()
+        usuarios = []
 
+        # Converte cada linha do SQLite em um objeto Usuario.
+        for registro in registros:
+            usuarios.append(_registro_para_usuario(registro))
 
-        return [
-
-            _registro_para_usuario(
-                registro
-            )
-
-            for registro in registros
-
-        ]
-
+        return usuarios
 
     finally:
-
         conexao.close()
 
-
-# ============================================================
-# ATUALIZAR DADOS
-# ============================================================
 
 def atualizar_usuario(
     usuario_id: int,
     nome: str,
     email: str
 ) -> bool:
-    """
-    Atualiza nome e e-mail de um usuário.
+    """Atualiza somente o nome e o e-mail de um usuário já cadastrado."""
+    _validar_usuario_id(usuario_id)
+    nome = _validar_nome(nome)
+    email = normalizar_email(email)
 
-    Perfil, senha e status possuem funções
-    específicas.
-    """
-
-    _validar_usuario_id(
-        usuario_id
-    )
-
-
-    nome = _validar_nome(
-        nome
-    )
-
-
-    email = normalizar_email(
-        email
-    )
-
-
-    usuario = buscar_usuario(
-        usuario_id
-    )
-
+    # Antes de atualizar, confirma que o usuário existe e que o novo e-mail está disponível.
+    usuario = buscar_usuario(usuario_id)
 
     if usuario is None:
+        raise ValueError("Usuário não encontrado.")
 
+    if email_existe(email, ignorar_usuario_id=usuario_id):
         raise ValueError(
-            "Usuário não encontrado."
+            "Já existe outro usuário cadastrado com este e-mail."
         )
-
-
-    if email_existe(
-        email,
-        ignorar_usuario_id=usuario_id
-    ):
-
-        raise ValueError(
-            "Já existe outro usuário cadastrado "
-            "com este e-mail."
-        )
-
 
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
-            """
-            UPDATE usuarios
-
-            SET
-                nome = ?,
-                email = ?
-
-            WHERE id = ?
-            """,
-            (
-                nome,
-                email,
-                usuario_id
-            )
+            "UPDATE usuarios SET nome = ?, email = ? WHERE id = ?",
+            (nome, email, usuario_id)
         )
-
 
         conexao.commit()
-
-
-        return (
-            cursor.rowcount > 0
-        )
-
+        return cursor.rowcount > 0
 
     except sqlite3.IntegrityError as erro:
-
         conexao.rollback()
-
 
         raise ValueError(
             "O e-mail informado já está cadastrado."
         ) from erro
 
-
     except sqlite3.Error:
-
         conexao.rollback()
-
         raise
 
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# ALTERAR SENHA HASH
-# ============================================================
-
-def atualizar_senha_hash(
-    usuario_id: int,
-    senha_hash: str
-) -> bool:
-    """
-    Atualiza o hash da senha.
-
-    Esta função não deve receber senha em texto puro.
-    """
-
-    _validar_usuario_id(
-        usuario_id
-    )
-
+def atualizar_senha_hash(usuario_id: int, senha_hash: str) -> bool:
+    """Substitui o hash da senha de um usuário sem receber a senha em texto puro."""
+    _validar_usuario_id(usuario_id)
 
     if not senha_hash:
-
-        raise ValueError(
-            "O hash da senha é obrigatório."
-        )
-
+        raise ValueError("O hash da senha é obrigatório.")
 
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
-            """
-            UPDATE usuarios
-
-            SET senha_hash = ?
-
-            WHERE id = ?
-            """,
-            (
-                senha_hash,
-                usuario_id
-            )
+            "UPDATE usuarios SET senha_hash = ? WHERE id = ?",
+            (senha_hash, usuario_id)
         )
-
 
         conexao.commit()
-
-
-        return (
-            cursor.rowcount > 0
-        )
-
+        return cursor.rowcount > 0
 
     except sqlite3.Error:
-
         conexao.rollback()
-
         raise
 
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# ALTERAR PERFIL
-# ============================================================
-
-def alterar_perfil(
-    usuario_id: int,
-    perfil: str
-) -> bool:
-    """
-    Altera o perfil de um usuário.
-
-    REGRA DE INTEGRIDADE:
-
-    Se o usuário for o último administrador ativo,
-    ele não poderá perder o perfil administrador.
-
-    A verificação e a alteração são executadas
-    dentro da mesma transação para evitar
-    condições de corrida.
-    """
-
-    _validar_usuario_id(
-        usuario_id
-    )
-
+def alterar_perfil(usuario_id: int, perfil: str) -> bool:
+    """Altera o perfil e impede que o sistema fique sem nenhum administrador ativo."""
+    _validar_usuario_id(usuario_id)
 
     if perfil not in PERFIS_PERMITIDOS:
-
-        raise ValueError(
-            "Perfil de usuário inválido."
-        )
-
+        raise ValueError("Perfil de usuário inválido.")
 
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
-        # --------------------------------------------------------
-        # BLOQUEAR ALTERAÇÕES CONCORRENTES
-        # --------------------------------------------------------
+        # A transação mantém juntas a verificação dos administradores e a alteração do perfil.
+        cursor.execute("BEGIN IMMEDIATE")
 
         cursor.execute(
-            "BEGIN IMMEDIATE"
+            "SELECT id, perfil, ativo FROM usuarios WHERE id = ?",
+            (usuario_id,)
         )
-
-
-        # --------------------------------------------------------
-        # BUSCAR USUÁRIO
-        # --------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                id,
-                perfil,
-                ativo
-
-            FROM usuarios
-
-            WHERE id = ?
-            """,
-            (
-                usuario_id,
-            )
-        )
-
 
         usuario = cursor.fetchone()
 
-
         if usuario is None:
-
             conexao.rollback()
-
             return False
 
+        perfil_atual = usuario["perfil"]
+        usuario_ativo = bool(usuario["ativo"])
 
-        perfil_atual = (
-            usuario["perfil"]
-        )
-
-
-        usuario_ativo = bool(
-            usuario["ativo"]
-        )
-
-
-        # --------------------------------------------------------
-        # PROTEGER ÚLTIMO ADMINISTRADOR ATIVO
-        # --------------------------------------------------------
-
+        # Se for o último administrador ativo, ele deve continuar administrador.
         if (
             perfil_atual == "administrador"
             and usuario_ativo
             and perfil != "administrador"
         ):
-
             cursor.execute(
                 """
                 SELECT COUNT(*) AS quantidade
-
                 FROM usuarios
-
-                WHERE perfil = 'administrador'
-
-                  AND ativo = 1
+                WHERE perfil = 'administrador' AND ativo = 1
                 """
             )
 
-
-            quantidade = int(
-                cursor.fetchone()[
-                    "quantidade"
-                ]
-            )
-
+            quantidade = int(cursor.fetchone()["quantidade"])
 
             if quantidade <= 1:
-
                 raise ValueError(
-                    "O último administrador ativo "
-                    "não pode perder o perfil "
-                    "de administrador."
+                    "O último administrador ativo não pode perder "
+                    "o perfil de administrador."
                 )
 
-
-        # --------------------------------------------------------
-        # ALTERAR PERFIL
-        # --------------------------------------------------------
-
         cursor.execute(
-            """
-            UPDATE usuarios
-
-            SET perfil = ?
-
-            WHERE id = ?
-            """,
-            (
-                perfil,
-                usuario_id
-            )
+            "UPDATE usuarios SET perfil = ? WHERE id = ?",
+            (perfil, usuario_id)
         )
 
-
         conexao.commit()
-
-
         return True
 
-
-    except ValueError:
-
+    except (ValueError, sqlite3.Error):
         conexao.rollback()
-
         raise
-
-
-    except sqlite3.Error:
-
-        conexao.rollback()
-
-        raise
-
 
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# ATIVAR USUÁRIO
-# ============================================================
-
-def ativar_usuario(
-    usuario_id: int
-) -> bool:
-    """
-    Ativa um usuário.
-    """
-
-    _validar_usuario_id(
-        usuario_id
-    )
-
-
+def ativar_usuario(usuario_id: int) -> bool:
+    """Ativa um usuário existente e devolve False quando o ID não é encontrado."""
+    _validar_usuario_id(usuario_id)
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
+        # Primeiro confirma a existência do cadastro.
         cursor.execute(
-            """
-            SELECT id
-
-            FROM usuarios
-
-            WHERE id = ?
-            """,
-            (
-                usuario_id,
-            )
+            "SELECT id FROM usuarios WHERE id = ?",
+            (usuario_id,)
         )
-
 
         if cursor.fetchone() is None:
-
             return False
 
-
         cursor.execute(
-            """
-            UPDATE usuarios
-
-            SET ativo = 1
-
-            WHERE id = ?
-            """,
-            (
-                usuario_id,
-            )
+            "UPDATE usuarios SET ativo = 1 WHERE id = ?",
+            (usuario_id,)
         )
 
-
         conexao.commit()
-
-
         return True
 
-
     except sqlite3.Error:
-
         conexao.rollback()
-
         raise
 
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# INATIVAR USUÁRIO
-# ============================================================
-
-def inativar_usuario(
-    usuario_id: int
-) -> bool:
-    """
-    Inativa um usuário.
-
-    O usuário não é removido fisicamente do banco,
-    preservando o histórico de entrevistas.
-
-    REGRA DE INTEGRIDADE:
-
-    O último administrador ativo não pode
-    ser inativado.
-
-    A verificação ocorre dentro da mesma
-    transação da alteração.
-    """
-
-    _validar_usuario_id(
-        usuario_id
-    )
-
-
+def inativar_usuario(usuario_id: int) -> bool:
+    """Inativa um usuário sem excluí-lo e protege o último administrador ativo."""
+    _validar_usuario_id(usuario_id)
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
-        # --------------------------------------------------------
-        # BLOQUEAR ALTERAÇÕES CONCORRENTES
-        # --------------------------------------------------------
+        # Mantém a consulta e a alteração na mesma transação para evitar conflito entre requisições.
+        cursor.execute("BEGIN IMMEDIATE")
 
         cursor.execute(
-            "BEGIN IMMEDIATE"
+            "SELECT id, perfil, ativo FROM usuarios WHERE id = ?",
+            (usuario_id,)
         )
-
-
-        # --------------------------------------------------------
-        # BUSCAR USUÁRIO
-        # --------------------------------------------------------
-
-        cursor.execute(
-            """
-            SELECT
-                id,
-                perfil,
-                ativo
-
-            FROM usuarios
-
-            WHERE id = ?
-            """,
-            (
-                usuario_id,
-            )
-        )
-
 
         usuario = cursor.fetchone()
 
-
         if usuario is None:
-
             conexao.rollback()
-
             return False
 
+        usuario_ativo = bool(usuario["ativo"])
+        perfil = usuario["perfil"]
 
-        usuario_ativo = bool(
-            usuario["ativo"]
-        )
-
-
-        perfil = (
-            usuario["perfil"]
-        )
-
-
-        # --------------------------------------------------------
-        # USUÁRIO JÁ INATIVO
-        # --------------------------------------------------------
-
+        # Se já estiver inativo, não é necessário alterar nada.
         if not usuario_ativo:
-
             conexao.commit()
-
             return True
 
-
-        # --------------------------------------------------------
-        # PROTEGER ÚLTIMO ADMINISTRADOR
-        # --------------------------------------------------------
-
+        # Um administrador só pode ser inativado quando existir outro administrador ativo.
         if perfil == "administrador":
-
             cursor.execute(
                 """
                 SELECT COUNT(*) AS quantidade
-
                 FROM usuarios
-
-                WHERE perfil = 'administrador'
-
-                  AND ativo = 1
+                WHERE perfil = 'administrador' AND ativo = 1
                 """
             )
 
-
-            quantidade = int(
-                cursor.fetchone()[
-                    "quantidade"
-                ]
-            )
-
+            quantidade = int(cursor.fetchone()["quantidade"])
 
             if quantidade <= 1:
-
                 raise ValueError(
-                    "O último administrador ativo "
-                    "não pode ser inativado."
+                    "O último administrador ativo não pode ser inativado."
                 )
 
-
-        # --------------------------------------------------------
-        # INATIVAR
-        # --------------------------------------------------------
-
         cursor.execute(
-            """
-            UPDATE usuarios
-
-            SET ativo = 0
-
-            WHERE id = ?
-            """,
-            (
-                usuario_id,
-            )
+            "UPDATE usuarios SET ativo = 0 WHERE id = ?",
+            (usuario_id,)
         )
 
-
         conexao.commit()
-
-
         return True
 
-
-    except ValueError:
-
+    except (ValueError, sqlite3.Error):
         conexao.rollback()
-
         raise
-
-
-    except sqlite3.Error:
-
-        conexao.rollback()
-
-        raise
-
 
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# REGISTRAR ÚLTIMO ACESSO
-# ============================================================
+def registrar_ultimo_acesso(usuario_id: int) -> None:
+    """Atualiza a data e a hora do último login realizado com sucesso."""
+    _validar_usuario_id(usuario_id)
 
-def registrar_ultimo_acesso(
-    usuario_id: int
-) -> None:
-    """
-    Registra a data e hora do último login
-    realizado com sucesso.
-    """
-
-    _validar_usuario_id(
-        usuario_id
-    )
-
-
+    # Mantém o mesmo formato de data já usado pelo projeto.
     data = datetime.now().isoformat(
         sep=" ",
         timespec="seconds"
     )
 
-
     conexao = conectar_banco()
-
     cursor = conexao.cursor()
 
-
     try:
-
         cursor.execute(
-            """
-            UPDATE usuarios
-
-            SET ultimo_acesso = ?
-
-            WHERE id = ?
-            """,
-            (
-                data,
-                usuario_id
-            )
+            "UPDATE usuarios SET ultimo_acesso = ? WHERE id = ?",
+            (data, usuario_id)
         )
-
 
         conexao.commit()
 
-
     except sqlite3.Error:
-
         conexao.rollback()
-
         raise
 
-
     finally:
-
         conexao.close()
 
 
-# ============================================================
-# CONVERTER REGISTRO
-# ============================================================
-
-def _registro_para_usuario(
-    registro: sqlite3.Row
-) -> Usuario:
-    """
-    Converte um registro SQLite
-    em objeto Usuario.
-    """
-
+def _registro_para_usuario(registro: sqlite3.Row) -> Usuario:
+    """Transforma uma linha recebida do SQLite em um objeto Usuario."""
     return Usuario(
-
-        id=registro[
-            "id"
-        ],
-
-        nome=registro[
-            "nome"
-        ],
-
-        email=registro[
-            "email"
-        ],
-
-        senha_hash=registro[
-            "senha_hash"
-        ],
-
-        perfil=registro[
-            "perfil"
-        ],
-
-        ativo=bool(
-            registro[
-                "ativo"
-            ]
-        ),
-
-        data_criacao=registro[
-            "data_criacao"
-        ],
-
-        ultimo_acesso=registro[
-            "ultimo_acesso"
-        ]
-
+        id=registro["id"],
+        nome=registro["nome"],
+        email=registro["email"],
+        senha_hash=registro["senha_hash"],
+        perfil=registro["perfil"],
+        ativo=bool(registro["ativo"]),
+        data_criacao=registro["data_criacao"],
+        ultimo_acesso=registro["ultimo_acesso"]
     )
