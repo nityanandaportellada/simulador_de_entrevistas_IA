@@ -3,10 +3,7 @@ import type { CadastroRequest, LoginRequest, LoginResponse } from '../types/auth
 import type { Usuario } from '../types/usuario'
 
 export async function login(dados: LoginRequest): Promise<LoginResponse> {
-  const resposta = await apiPost<LoginResponse, LoginRequest>(
-    '/auth/login',
-    dados
-  )
+  const resposta = await apiPost<LoginResponse, LoginRequest>('/auth/login', dados)
   setAccessToken(resposta.access_token)
   return resposta
 }

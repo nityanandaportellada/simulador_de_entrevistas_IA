@@ -8,7 +8,9 @@ export interface Pergunta {
   ativa: boolean
   peso: number
   usa_star: boolean
-  data_criacao: string
+  data_criacao: string | null
+  area_tecnica_id: number | null
+  subarea_tecnica_id: number | null
 }
 
 export interface PerguntaRequest {
@@ -19,9 +21,8 @@ export interface PerguntaRequest {
   ordem?: number | null
   peso: number
   usa_star: boolean
+  area_tecnica_id?: number | null
+  subarea_tecnica_id?: number | null
 }
 
-export interface AtivarPerguntaResponse {
-  mensagem: string
-  pergunta: Pergunta
-}
+export type AtivarPerguntaResponse = Pergunta

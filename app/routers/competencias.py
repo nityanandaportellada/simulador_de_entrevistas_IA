@@ -1,3 +1,4 @@
+
 """Rotas usadas para consultar e administrar as competências do simulador."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,7 +23,9 @@ router = APIRouter(prefix="/competencias", tags=["Competências"])
 @router.get("", response_model=list[CompetenciaResposta])
 def listar(somente_ativas: bool = False, usuario: Usuario = Depends(obter_usuario_atual)):
     """Lista as competências para qualquer usuário autenticado."""
-    # A interface pode solicitar somente as competências que estão disponíveis.
+    # Estudantes não podem ampliar a consulta para competências inativas.
+    if usuario.perfil != "administrador":
+        somente_ativas = True
     return listar_competencias(somente_ativas=somente_ativas)
 
 
@@ -34,7 +37,7 @@ def consultar(competencia_id: int, usuario: Usuario = Depends(obter_usuario_atua
     except ValueError as erro:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
-    if competencia is None:
+    if competencia is None or (usuario.perfil != "administrador" and not competencia["ativo"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competência não encontrada.")
 
     return competencia

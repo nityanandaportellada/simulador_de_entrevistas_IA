@@ -1,9 +1,10 @@
+
 """Rotas usadas para consultar e administrar as áreas técnicas."""
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..areas_tecnicas import (
     ativar_area_tecnica,
@@ -20,6 +21,7 @@ from ..subareas_tecnicas import listar_subareas_tecnicas
 
 class AreaTecnicaCriar(BaseModel):
     """Define os dados aceitos no cadastro de uma nova área técnica."""
+    model_config = ConfigDict(extra="forbid")
     nome: str = Field(min_length=2, max_length=150)
     descricao: Optional[str] = Field(default=None, max_length=500)
     ordem: Optional[int] = Field(default=None, ge=0)
@@ -27,6 +29,7 @@ class AreaTecnicaCriar(BaseModel):
 
 class AreaTecnicaAtualizar(BaseModel):
     """Define os dados aceitos na edição de uma área técnica."""
+    model_config = ConfigDict(extra="forbid")
     nome: str = Field(min_length=2, max_length=150)
     descricao: Optional[str] = Field(default=None, max_length=500)
     ordem: Optional[int] = Field(default=None, ge=0)
@@ -41,16 +44,18 @@ def listar(
     somente_ativas: bool = Query(default=True),
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
-    """Lista as áreas técnicas e permite incluir registros inativos pelo parâmetro da rota."""
+    """Lista áreas ativas para estudantes e permite auditoria completa ao administrador."""
+    if usuario.perfil != "administrador":
+        somente_ativas = True
     return listar_areas_tecnicas(somente_ativas=somente_ativas)
 
 
 @router.get("/{area_id}")
-def consultar(area_id: int, usuario: Usuario = Depends(obter_usuario_atual)):
+def consultar(area_id: int = Path(gt=0), usuario: Usuario = Depends(obter_usuario_atual)):
     """Consulta uma área técnica pelo ID informado."""
     area = buscar_area_tecnica(area_id)
 
-    if area is None:
+    if area is None or (usuario.perfil != "administrador" and not area.ativo):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Área técnica não encontrada."
@@ -61,7 +66,7 @@ def consultar(area_id: int, usuario: Usuario = Depends(obter_usuario_atual)):
 
 @router.get("/{area_id}/subareas")
 def listar_subareas(
-    area_id: int,
+    area_id: int = Path(gt=0),
     somente_ativas: bool = Query(default=True),
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
@@ -69,12 +74,14 @@ def listar_subareas(
     # Antes de listar, confirma que a área informada realmente existe.
     area = buscar_area_tecnica(area_id)
 
-    if area is None:
+    if area is None or (usuario.perfil != "administrador" and not area.ativo):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Área técnica não encontrada."
         )
 
+    if usuario.perfil != "administrador":
+        somente_ativas = True
     return listar_subareas_tecnicas(
         area_tecnica_id=area_id,
         somente_ativas=somente_ativas

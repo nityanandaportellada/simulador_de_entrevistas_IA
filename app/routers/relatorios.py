@@ -1,3 +1,4 @@
+
 """Rotas responsáveis pela consulta dos relatórios das entrevistas."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -25,11 +26,18 @@ def relatorio_entrevista(
             detail=str(erro)
         )
 
-    # Estudantes só podem consultar relatórios das próprias entrevistas.
+    # Uma consulta de terceiro devolve a mesma mensagem de uma entrevista inexistente.
     if usuario.perfil != "administrador" and entrevista.usuario_id != usuario.id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não possui permissão para visualizar este relatório."
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entrevista não encontrada."
+        )
+
+    # O relatório completo só é liberado após a avaliação terminar.
+    if entrevista.status != "avaliada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O relatório estará disponível após a conclusão da avaliação."
         )
 
     try:

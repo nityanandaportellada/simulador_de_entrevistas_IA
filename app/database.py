@@ -1,3 +1,4 @@
+
 """Conexão e criação das tabelas do Simulador de Entrevistas."""
 
 import os
@@ -52,12 +53,50 @@ def _adicionar_coluna_se_ausente(cursor, tabela, coluna, definicao):
     cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
 
 
+def _permitir_competencia_opcional(cursor, tabela, campos):
+    """Atualiza a obrigatoriedade da competência sem perder registros e índices."""
+    # Só reconstrói tabelas antigas que ainda exigem competência.
+    cursor.execute(f"PRAGMA table_info({tabela})")
+    colunas = cursor.fetchall()
+    if not any(coluna["name"] in campos and coluna["notnull"] for coluna in colunas):
+        return
+
+    # Guarda índices e triggers próprios para restaurá-los depois da cópia.
+    cursor.execute(
+        "SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? AND sql IS NOT NULL AND type IN ('index', 'trigger')",
+        (tabela,)
+    )
+    objetos = cursor.fetchall()
+    cursor.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (tabela,))
+    definicao = cursor.fetchone()["sql"]
+    if definicao is None:
+        raise sqlite3.DatabaseError(f"Tabela {tabela} não encontrada.")
+
+    # Usa a definição real do banco, alterando somente os campos necessários.
+    nova_definicao = definicao.replace(f"CREATE TABLE {tabela}", f"CREATE TABLE {tabela}_nova", 1)
+    for campo in campos:
+        nova_definicao = nova_definicao.replace(f"{campo} INTEGER NOT NULL", f"{campo} INTEGER")
+        nova_definicao = nova_definicao.replace(f"{campo} TEXT NOT NULL", f"{campo} TEXT")
+    nomes = ", ".join(f'"{coluna["name"]}"' for coluna in colunas)
+    cursor.execute(nova_definicao)
+    cursor.execute(f"INSERT INTO {tabela}_nova ({nomes}) SELECT {nomes} FROM {tabela}")
+    cursor.execute(f"DROP TABLE {tabela}")
+    cursor.execute(f"ALTER TABLE {tabela}_nova RENAME TO {tabela}")
+
+    # Recria apenas os objetos que pertenciam à tabela original.
+    for objeto in objetos:
+        cursor.execute(objeto["sql"])
+
+
 def criar_tabelas():
     """Cria as tabelas, atualiza bancos antigos e prepara índices e triggers."""
     conexao = conectar_banco()
+    # A reconstrução de tabelas exige suspender temporariamente as chaves estrangeiras.
+    conexao.execute("PRAGMA foreign_keys = OFF")
     cursor = conexao.cursor()
 
     try:
+        cursor.execute("BEGIN IMMEDIATE")
         # ====================================================
         # TABELAS PRINCIPAIS
         # ====================================================
@@ -156,9 +195,11 @@ def criar_tabelas():
             CREATE TABLE IF NOT EXISTS perguntas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tipo_entrevista_id INTEGER NOT NULL,
-                competencia_id INTEGER NOT NULL,
+                competencia_id INTEGER,
                 texto TEXT NOT NULL,
                 exemplo_esperado TEXT,
+                codigo TEXT UNIQUE,
+                dificuldade TEXT CHECK (dificuldade IN ('basica', 'intermediaria', 'avancada')),
                 ordem INTEGER,
                 ativa INTEGER NOT NULL DEFAULT 1 CHECK (ativa IN (0, 1)),
                 peso REAL NOT NULL DEFAULT 1.0 CHECK (peso >= 0),
@@ -188,6 +229,7 @@ def criar_tabelas():
                 ),
                 pontuacao_final REAL,
                 observacoes TEXT,
+                perfil_profissional TEXT CHECK (perfil_profissional IN ('estagio_trainee', 'junior', 'pleno', 'senior')),
                 tipo_entrevista_nome_aplicado TEXT,
                 tipo_entrevista_descricao_aplicada TEXT,
                 area_tecnica_id INTEGER,
@@ -211,8 +253,10 @@ def criar_tabelas():
                 pergunta_id INTEGER NOT NULL,
                 pergunta_texto_aplicado TEXT NOT NULL,
                 exemplo_esperado_aplicado TEXT,
-                competencia_id_aplicada INTEGER NOT NULL,
-                competencia_nome_aplicada TEXT NOT NULL,
+                codigo_pergunta_aplicado TEXT,
+                dificuldade_aplicada TEXT CHECK (dificuldade_aplicada IN ('basica', 'intermediaria', 'avancada')),
+                competencia_id_aplicada INTEGER,
+                competencia_nome_aplicada TEXT,
                 area_tecnica_id_aplicada INTEGER,
                 area_tecnica_nome_aplicada TEXT,
                 subarea_tecnica_id_aplicada INTEGER,
@@ -331,6 +375,14 @@ def criar_tabelas():
 
         _adicionar_coluna_se_ausente(cursor, "perguntas", "area_tecnica_id", "INTEGER REFERENCES areas_tecnicas(id)")
         _adicionar_coluna_se_ausente(cursor, "perguntas", "subarea_tecnica_id", "INTEGER REFERENCES subareas_tecnicas(id)")
+        # Identifica as perguntas e permite escolher por nível profissional.
+        _adicionar_coluna_se_ausente(cursor, "perguntas", "codigo", "TEXT")
+        _adicionar_coluna_se_ausente(cursor, "perguntas", "dificuldade", "TEXT CHECK (dificuldade IN ('basica', 'intermediaria', 'avancada'))")
+        # Entrevistas antigas ficam sem perfil; seu histórico não é modificado.
+        _adicionar_coluna_se_ausente(cursor, "entrevistas", "perfil_profissional", "TEXT CHECK (perfil_profissional IN ('estagio_trainee', 'junior', 'pleno', 'senior'))")
+        # Mantém os metadados da pergunta aplicada, mesmo se o catálogo mudar.
+        _adicionar_coluna_se_ausente(cursor, "entrevista_perguntas", "codigo_pergunta_aplicado", "TEXT")
+        _adicionar_coluna_se_ausente(cursor, "entrevista_perguntas", "dificuldade_aplicada", "TEXT CHECK (dificuldade_aplicada IN ('basica', 'intermediaria', 'avancada'))")
 
         _adicionar_coluna_se_ausente(cursor, "entrevistas", "tipo_entrevista_nome_aplicado", "TEXT")
         _adicionar_coluna_se_ausente(cursor, "entrevistas", "tipo_entrevista_descricao_aplicada", "TEXT")
@@ -374,11 +426,21 @@ def criar_tabelas():
             "trg_respostas_snapshot_insert_protegido",
             "trg_avaliacao_criterios_snapshot_insert",
             "trg_avaliacao_criterios_snapshot_imutavel",
-            "trg_entrevista_perguntas_snapshot_imutavel"
+            "trg_entrevista_perguntas_snapshot_imutavel",
+            "trg_respostas_validar_sequencia",
+            "trg_respostas_texto_imutavel",
+            "trg_respostas_identidade_imutavel",
+            "trg_respostas_nao_excluir",
+            "trg_entrevista_perguntas_nao_excluir",
+            "trg_entrevista_perguntas_limitar_oito"
         )
 
         for nome_trigger in triggers_para_recriar:
             cursor.execute(f"DROP TRIGGER IF EXISTS {nome_trigger};")
+
+        # Permite competência vazia em perguntas técnicas, sem remover os vínculos existentes.
+        _permitir_competencia_opcional(cursor, "perguntas", ("competencia_id",))
+        _permitir_competencia_opcional(cursor, "entrevista_perguntas", ("competencia_id_aplicada", "competencia_nome_aplicada"))
 
         # ====================================================
         # PREENCHIMENTO DE SNAPSHOTS ANTIGOS
@@ -580,6 +642,9 @@ def criar_tabelas():
         # ====================================================
 
         # Os índices abaixo aceleram as consultas mais usadas pelo sistema.
+        # Permite importar o catálogo várias vezes sem códigos duplicados.
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_perguntas_codigo ON perguntas(codigo);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_perguntas_dificuldade ON perguntas(dificuldade);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_perguntas_tipo ON perguntas(tipo_entrevista_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_perguntas_competencia ON perguntas(competencia_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_perguntas_area_tecnica ON perguntas(area_tecnica_id);")
@@ -725,7 +790,7 @@ def criar_tabelas():
             CREATE TRIGGER IF NOT EXISTS trg_respostas_snapshot_insert
             AFTER INSERT ON respostas
             WHEN NEW.pergunta_texto_aplicado IS NULL
-              OR NEW.competencia_nome_aplicada IS NULL
+              OR (NEW.competencia_id_aplicada IS NOT NULL AND NEW.competencia_nome_aplicada IS NULL)
               OR NEW.peso_pergunta_aplicado IS NULL
               OR NEW.usa_star_aplicado IS NULL
             BEGIN
@@ -776,7 +841,6 @@ def criar_tabelas():
                 competencia_nome_aplicada, peso_pergunta_aplicado, usa_star_aplicado, ordem_pergunta_aplicada
             ON respostas
             WHEN OLD.pergunta_texto_aplicado IS NOT NULL
-              AND OLD.competencia_nome_aplicada IS NOT NULL
               AND OLD.peso_pergunta_aplicado IS NOT NULL
               AND OLD.usa_star_aplicado IS NOT NULL
             BEGIN
@@ -794,21 +858,21 @@ def criar_tabelas():
             BEGIN
                 UPDATE avaliacao_criterios
                 SET peso_aplicado = COALESCE(
-                        NEW.peso_aplicado,
-                        (SELECT c.peso FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
-                    ),
-                    criterio_nome_aplicado = COALESCE(
-                        NEW.criterio_nome_aplicado,
-                        (SELECT c.nome FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
-                    ),
-                    criterio_descricao_aplicada = COALESCE(
-                        NEW.criterio_descricao_aplicada,
-                        (SELECT c.descricao FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
-                    ),
-                    criterio_ordem_aplicada = COALESCE(
-                        NEW.criterio_ordem_aplicada,
-                        (SELECT c.ordem FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
-                    )
+                    NEW.peso_aplicado,
+                    (SELECT c.peso FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
+                ),
+                criterio_nome_aplicado = COALESCE(
+                    NEW.criterio_nome_aplicado,
+                    (SELECT c.nome FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
+                ),
+                criterio_descricao_aplicada = COALESCE(
+                    NEW.criterio_descricao_aplicada,
+                    (SELECT c.descricao FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
+                ),
+                criterio_ordem_aplicada = COALESCE(
+                    NEW.criterio_ordem_aplicada,
+                    (SELECT c.ordem FROM criterios_avaliacao c WHERE c.id = NEW.criterio_id)
+                )
                 WHERE id = NEW.id;
             END;
             """
@@ -838,6 +902,125 @@ def criar_tabelas():
             """
         )
 
+        # Entrevistas novas precisam receber respostas na sequência dos oito snapshots.
+        # O trigger também protege contra inserts feitos diretamente pelo SQLite.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_respostas_validar_sequencia
+            BEFORE INSERT ON respostas
+            WHEN (SELECT perfil_profissional FROM entrevistas WHERE id = NEW.entrevista_id) IS NOT NULL
+            BEGIN
+                SELECT CASE WHEN (SELECT status FROM entrevistas WHERE id = NEW.entrevista_id) != 'em_andamento'
+                    THEN RAISE(ABORT, 'A entrevista não está em andamento.') END;
+                SELECT CASE WHEN (SELECT COUNT(*) FROM entrevista_perguntas WHERE entrevista_id = NEW.entrevista_id) != 8
+                    THEN RAISE(ABORT, 'A entrevista não possui oito perguntas congeladas.') END;
+                SELECT CASE WHEN NOT EXISTS (
+                    SELECT 1 FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) THEN RAISE(ABORT, 'A pergunta não pertence à entrevista.') END;
+                SELECT CASE WHEN NEW.pergunta_id != (
+                    SELECT ep.pergunta_id FROM entrevista_perguntas ep
+                    WHERE ep.entrevista_id = NEW.entrevista_id AND NOT EXISTS (
+                        SELECT 1 FROM respostas r
+                        WHERE r.entrevista_id = ep.entrevista_id AND r.pergunta_id = ep.pergunta_id
+                    )
+                    ORDER BY ep.ordem_pergunta_aplicada, ep.id LIMIT 1
+                ) THEN RAISE(ABORT, 'Responda às perguntas em sequência.') END;
+                SELECT CASE WHEN NEW.pergunta_texto_aplicado IS NOT (
+                    SELECT pergunta_texto_aplicado FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) OR NEW.exemplo_esperado_aplicado IS NOT (
+                    SELECT exemplo_esperado_aplicado FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) OR NEW.competencia_id_aplicada IS NOT (
+                    SELECT competencia_id_aplicada FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) OR NEW.competencia_nome_aplicada IS NOT (
+                    SELECT competencia_nome_aplicada FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) OR NEW.peso_pergunta_aplicado IS NOT (
+                    SELECT peso_pergunta_aplicado FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) OR NEW.usa_star_aplicado IS NOT (
+                    SELECT usa_star_aplicado FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) OR NEW.ordem_pergunta_aplicada IS NOT (
+                    SELECT ordem_pergunta_aplicada FROM entrevista_perguntas
+                    WHERE entrevista_id = NEW.entrevista_id AND pergunta_id = NEW.pergunta_id
+                ) THEN RAISE(ABORT, 'O snapshot da resposta deve corresponder à pergunta congelada.') END;
+            END;
+            """
+        )
+
+        # Texto e tempo enviados não podem ser modificados, inclusive via SQL direto.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_respostas_texto_imutavel
+            BEFORE UPDATE OF texto_resposta, tempo_resposta ON respostas
+            BEGIN
+                SELECT RAISE(ABORT, 'Respostas enviadas não podem ser editadas.');
+            END;
+            """
+        )
+
+        # Identificador, entrevista, pergunta e data da resposta também são definitivos.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_respostas_identidade_imutavel
+            BEFORE UPDATE OF entrevista_id, pergunta_id, data_resposta ON respostas
+            BEGIN
+                SELECT RAISE(ABORT, 'A identidade e a data da resposta são imutáveis.');
+            END;
+            """
+        )
+
+        # Impede excluir respostas históricas, inclusive quando já foram avaliadas.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_respostas_nao_excluir
+            BEFORE DELETE ON respostas
+            BEGIN
+                SELECT RAISE(ABORT, 'Respostas enviadas não podem ser excluídas.');
+            END;
+            """
+        )
+
+        # Proíbe apagar perguntas já congeladas; elas pertencem ao histórico.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_entrevista_perguntas_nao_excluir
+            BEFORE DELETE ON entrevista_perguntas
+            BEGIN
+                SELECT RAISE(ABORT, 'Perguntas congeladas não podem ser excluídas.');
+            END;
+            """
+        )
+
+        # O conjunto de uma entrevista nova nunca pode ultrapassar oito perguntas.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_entrevista_perguntas_limitar_oito
+            BEFORE INSERT ON entrevista_perguntas
+            WHEN (SELECT perfil_profissional FROM entrevistas WHERE id = NEW.entrevista_id) IS NOT NULL
+            BEGIN
+                SELECT CASE WHEN (SELECT status FROM entrevistas WHERE id = NEW.entrevista_id) != 'em_andamento'
+                    THEN RAISE(ABORT, 'A entrevista não está em andamento.') END;
+                SELECT CASE WHEN (SELECT COUNT(*) FROM entrevista_perguntas WHERE entrevista_id = NEW.entrevista_id) >= 8
+                    THEN RAISE(ABORT, 'A entrevista já possui oito perguntas.') END;
+                SELECT CASE WHEN NEW.ordem_pergunta_aplicada IS NULL OR NEW.ordem_pergunta_aplicada !=
+                    (SELECT COUNT(*) + 1 FROM entrevista_perguntas WHERE entrevista_id = NEW.entrevista_id)
+                    THEN RAISE(ABORT, 'A ordem das perguntas congeladas está incorreta.') END;
+            END;
+            """
+        )
+
+        # Confere a integridade antes de confirmar a migração.
+        cursor.execute("PRAGMA foreign_key_check")
+        if cursor.fetchone() is not None:
+            raise sqlite3.IntegrityError("A migração encontrou referências inválidas entre tabelas.")
+        cursor.execute("PRAGMA integrity_check")
+        if cursor.fetchone()[0] != "ok":
+            raise sqlite3.DatabaseError("A verificação de integridade do banco falhou.")
         # Confirma todas as alterações feitas durante a preparação do banco.
         conexao.commit()
         print("Banco de dados criado/atualizado com sucesso.")

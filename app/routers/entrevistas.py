@@ -1,6 +1,8 @@
+
 """Rotas usadas para iniciar, responder, consultar e finalizar entrevistas."""
 
-from typing import Optional
+from dataclasses import asdict
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,14 +29,18 @@ class EntrevistaCriar(BaseModel):
     tipo_entrevista_id: int = Field(gt=0)
     area_tecnica_id: Optional[int] = Field(default=None, gt=0)
     subarea_tecnica_id: Optional[int] = Field(default=None, gt=0)
+    # O perfil define a quantidade de perguntas por dificuldade.
+    perfil_profissional: Literal["estagio_trainee", "junior", "pleno", "senior"]
 
 
 # Agrupa as rotas relacionadas às entrevistas.
 router = APIRouter(prefix="/entrevistas", tags=["Entrevistas"])
 
 
-def _obter_entrevista_autorizada(entrevista_id: int, usuario: Usuario):
-    """Busca a entrevista e verifica se o usuário pode acessá-la."""
+def _obter_entrevista_autorizada(entrevista_id: int, usuario: Usuario, exigir_proprietario: bool = False):
+    """Permite leitura administrativa, mas exige proprietário nas alterações."""
+    if entrevista_id <= 0:
+        raise HTTPException(status_code=404, detail="Entrevista não encontrada.")
     entrevista = buscar_entrevista(entrevista_id)
 
     if entrevista is None:
@@ -43,14 +49,21 @@ def _obter_entrevista_autorizada(entrevista_id: int, usuario: Usuario):
             detail="Entrevista não encontrada."
         )
 
-    # Estudantes acessam somente as próprias entrevistas. Administradores podem acessar todas.
-    if usuario.perfil != "administrador" and entrevista.usuario_id != usuario.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso não autorizado."
-        )
+    # Para terceiros, 404 não revela se a entrevista existe.
+    if entrevista.usuario_id != usuario.id and (exigir_proprietario or usuario.perfil != "administrador"):
+        raise HTTPException(status_code=404, detail="Entrevista não encontrada.")
 
     return entrevista
+
+
+def _ocultar_referencias(registros):
+    """Entrega perguntas e respostas sem divulgar o gabarito guardado para a IA."""
+    resultado = []
+    for registro in registros:
+        dados = asdict(registro)
+        dados["exemplo_esperado_aplicado"] = None
+        resultado.append(dados)
+    return resultado
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -71,7 +84,8 @@ def iniciar(
             usuario_id=usuario.id,
             tipo_entrevista_id=dados.tipo_entrevista_id,
             area_tecnica_id=dados.area_tecnica_id,
-            subarea_tecnica_id=dados.subarea_tecnica_id
+            subarea_tecnica_id=dados.subarea_tecnica_id,
+            perfil_profissional=dados.perfil_profissional
         )
         entrevista = buscar_entrevista(entrevista_id)
 
@@ -104,11 +118,11 @@ def perguntas(
     entrevista_id: int,
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
-    """Retorna somente as perguntas que foram congeladas para a entrevista."""
+    """Retorna as perguntas congeladas, sem revelar as respostas de referência."""
     _obter_entrevista_autorizada(entrevista_id, usuario)
 
     try:
-        return listar_perguntas_entrevista(entrevista_id)
+        return _ocultar_referencias(listar_perguntas_entrevista(entrevista_id))
     except ValueError as erro:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -123,7 +137,7 @@ def responder(
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
     """Registra uma resposta para uma pergunta pertencente à entrevista."""
-    entrevista = _obter_entrevista_autorizada(entrevista_id, usuario)
+    entrevista = _obter_entrevista_autorizada(entrevista_id, usuario, exigir_proprietario=True)
 
     if entrevista.status != "em_andamento":
         raise HTTPException(
@@ -159,9 +173,9 @@ def respostas(
     entrevista_id: int,
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
-    """Lista as respostas registradas para a entrevista autorizada."""
+    """Lista as respostas registradas sem revelar os exemplos usados na avaliação."""
     _obter_entrevista_autorizada(entrevista_id, usuario)
-    return listar_respostas_entrevista(entrevista_id)
+    return _ocultar_referencias(listar_respostas_entrevista(entrevista_id))
 
 
 @router.get("/{entrevista_id}/progresso")
@@ -189,7 +203,7 @@ def finalizar(
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
     """Finaliza a entrevista; o serviço confirma que todas as perguntas foram respondidas."""
-    entrevista = _obter_entrevista_autorizada(entrevista_id, usuario)
+    entrevista = _obter_entrevista_autorizada(entrevista_id, usuario, exigir_proprietario=True)
 
     if entrevista.status != "em_andamento":
         raise HTTPException(

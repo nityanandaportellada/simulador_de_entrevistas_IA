@@ -1,19 +1,24 @@
+
 """Schemas Pydantic usados para validar dados recebidos e devolvidos pela API."""
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
 # ============================================================
 # AUTENTICAÇÃO
 # ============================================================
 
 class LoginRequest(BaseModel):
-    # Recebe e valida os dados enviados no login.
-    email: EmailStr
-    senha: str = Field(min_length=8)
+    """Valida o login e rejeita campos extras enviados pelo cliente."""
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr = Field(max_length=254)
+    senha: str = Field(min_length=8, max_length=128)
 
 
 class TokenResponse(BaseModel):
-    # Define os dados devolvidos depois de um login válido.
+    """Retorna apenas o token de acesso; nunca inclui dados de senha."""
+    model_config = ConfigDict(extra="forbid")
     access_token: str
     token_type: str = "bearer"
 
@@ -23,22 +28,23 @@ class TokenResponse(BaseModel):
 # ============================================================
 
 class UsuarioCriar(BaseModel):
-    # Valida os dados usados para criar um estudante.
-    nome: str = Field(min_length=2, max_length=150)
-    email: EmailStr
+    """Cadastro público; o perfil é sempre estudante no serviço de autenticação."""
+    model_config = ConfigDict(extra="forbid")
+    nome: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=150)]
+    email: EmailStr = Field(max_length=254)
     senha: str = Field(min_length=8, max_length=128)
 
 
 class UsuarioAtualizar(BaseModel):
-    # Valida os dados que podem ser alterados no cadastro do usuário.
-    nome: str = Field(min_length=2, max_length=150)
-    email: EmailStr
+    """Permite alteração apenas do próprio nome e e-mail."""
+    model_config = ConfigDict(extra="forbid")
+    nome: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=150)]
+    email: EmailStr = Field(max_length=254)
 
 
 class UsuarioResposta(BaseModel):
-    # Define os dados de usuário que podem ser devolvidos pela API.
-    model_config = ConfigDict(from_attributes=True)
-
+    """Exclui senha_hash e quaisquer outros campos internos das respostas HTTP."""
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
     id: int
     nome: str
     email: str
@@ -49,14 +55,16 @@ class UsuarioResposta(BaseModel):
 
 
 class AlterarSenhaRequest(BaseModel):
-    # Valida a senha atual e a nova senha enviadas pelo usuário.
-    senha_atual: str
+    """Recebe duas senhas sem aceitar campos administrativos adicionais."""
+    model_config = ConfigDict(extra="forbid")
+    senha_atual: str = Field(min_length=1, max_length=128)
     nova_senha: str = Field(min_length=8, max_length=128)
 
 
 class AlterarPerfilRequest(BaseModel):
-    # Recebe o novo perfil que será validado pela regra do serviço.
-    perfil: str
+    """Restringe o perfil a um dos dois papéis existentes no banco."""
+    model_config = ConfigDict(extra="forbid")
+    perfil: Literal["estudante", "administrador"]
 
 
 # ============================================================
@@ -78,6 +86,7 @@ class TipoEntrevistaResposta(BaseModel):
     id: int
     nome: str
     ativo: bool
+    usa_area_tecnica: bool = False
 
 
 class TipoEntrevistaDetalheResposta(BaseModel):
@@ -85,6 +94,7 @@ class TipoEntrevistaDetalheResposta(BaseModel):
     id: int
     nome: str
     ativo: bool
+    usa_area_tecnica: bool = False
     quantidade_perguntas: int = Field(ge=0)
     quantidade_entrevistas: int = Field(ge=0)
     em_uso: bool
@@ -183,18 +193,22 @@ class ResumoPesosResposta(BaseModel):
 # ============================================================
 
 class PerguntaCriar(BaseModel):
-    # Valida os dados básicos usados para cadastrar uma pergunta.
-    tipo_entrevista_id: int
-    competencia_id: int
+    """Valida o cadastro de perguntas, inclusive aquelas de áreas técnicas."""
+    tipo_entrevista_id: int = Field(gt=0)
+    competencia_id: int | None = Field(default=None, gt=0)
     texto: str = Field(min_length=3)
     exemplo_esperado: str | None = None
     ordem: int | None = None
     peso: float = Field(default=1.0, gt=0)
     usa_star: bool = False
+    area_tecnica_id: int | None = Field(default=None, gt=0)
+    subarea_tecnica_id: int | None = Field(default=None, gt=0)
+    codigo: str | None = Field(default=None, min_length=3, max_length=30)
+    dificuldade: str | None = Field(default=None, pattern="^(basica|intermediaria|avancada)$")
 
 
 class PerguntaResposta(BaseModel):
-    # Define os dados de uma pergunta devolvida pela API.
+    """Define os dados que podem ser devolvidos ao consultar uma pergunta."""
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -207,17 +221,25 @@ class PerguntaResposta(BaseModel):
     peso: float
     usa_star: bool
     data_criacao: str | None = None
+    area_tecnica_id: int | None = None
+    subarea_tecnica_id: int | None = None
+    codigo: str | None = None
+    dificuldade: str | None = None
 
 
 class PerguntaAtualizar(BaseModel):
-    # Valida os dados básicos usados para editar uma pergunta.
-    tipo_entrevista_id: int
-    competencia_id: int
+    """Valida a edição de perguntas sem exigir competência em tipos técnicos."""
+    tipo_entrevista_id: int = Field(gt=0)
+    competencia_id: int | None = Field(default=None, gt=0)
     texto: str = Field(min_length=3)
     exemplo_esperado: str | None = None
     ordem: int | None = None
     peso: float = Field(default=1.0, gt=0)
     usa_star: bool = False
+    area_tecnica_id: int | None = Field(default=None, gt=0)
+    subarea_tecnica_id: int | None = Field(default=None, gt=0)
+    codigo: str | None = Field(default=None, min_length=3, max_length=30)
+    dificuldade: str | None = Field(default=None, pattern="^(basica|intermediaria|avancada)$")
 
 
 # ============================================================
@@ -225,8 +247,11 @@ class PerguntaAtualizar(BaseModel):
 # ============================================================
 
 class EntrevistaCriar(BaseModel):
-    # Recebe o tipo de entrevista usado no formato básico do schema.
-    tipo_entrevista_id: int
+    """Recebe o tipo, o perfil e o contexto técnico para iniciar a entrevista."""
+    tipo_entrevista_id: int = Field(gt=0)
+    area_tecnica_id: int | None = Field(default=None, gt=0)
+    subarea_tecnica_id: int | None = Field(default=None, gt=0)
+    perfil_profissional: str | None = Field(default=None, pattern="^(estagio_trainee|junior|pleno|senior)$")
 
 
 class EntrevistaResposta(BaseModel):
@@ -241,6 +266,9 @@ class EntrevistaResposta(BaseModel):
     status: str
     pontuacao_final: float | None = None
     observacoes: str | None = None
+    perfil_profissional: str | None = None
+    area_tecnica_id: int | None = None
+    subarea_tecnica_id: int | None = None
 
 
 # ============================================================

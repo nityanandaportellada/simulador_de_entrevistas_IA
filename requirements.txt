@@ -1,0 +1,19 @@
+
+# Framework da API REST
+fastapi==0.142.2
+
+# Servidor de aplicação
+uvicorn==0.54.0
+
+# Validação de dados
+pydantic==2.13.5
+email-validator==2.3.0
+
+# Integração com Inteligência Artificial
+openai==3.24.0
+
+# Autenticação JWT
+PyJWT==2.15.1
+
+# Proteção de senhas
+argon2-cffi==25.1.0

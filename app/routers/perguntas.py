@@ -1,5 +1,7 @@
+
 """Rotas usadas para consultar e administrar o banco de perguntas."""
 
+from dataclasses import replace
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,13 +21,13 @@ from ..security import obter_administrador_atual, obter_usuario_atual
 
 
 class PerguntaCriar(BaseModel):
-    """Contrato usado no cadastro. Área e subárea são exigidas pelo serviço quando o tipo for técnico."""
+    """Define os dados permitidos no cadastro de uma pergunta."""
 
-    # Campos não previstos são rejeitados para evitar dados enviados por engano.
+    # Rejeita campos desconhecidos enviados na requisição.
     model_config = ConfigDict(extra="forbid")
 
     tipo_entrevista_id: int = Field(gt=0)
-    competencia_id: int = Field(gt=0)
+    competencia_id: Optional[int] = Field(default=None, gt=0)
     texto: str = Field(min_length=3, max_length=4000)
     exemplo_esperado: Optional[str] = Field(default=None, max_length=8000)
     ordem: Optional[int] = Field(default=None, gt=0)
@@ -33,15 +35,17 @@ class PerguntaCriar(BaseModel):
     usa_star: bool = False
     area_tecnica_id: Optional[int] = Field(default=None, gt=0)
     subarea_tecnica_id: Optional[int] = Field(default=None, gt=0)
+    codigo: Optional[str] = Field(default=None, min_length=3, max_length=30)
+    dificuldade: Optional[str] = Field(default=None, pattern="^(basica|intermediaria|avancada)$")
 
 
 class PerguntaAtualizar(BaseModel):
-    """Contrato utilizado para atualização de uma pergunta."""
+    """Define os dados permitidos na atualização de uma pergunta."""
 
     model_config = ConfigDict(extra="forbid")
 
     tipo_entrevista_id: int = Field(gt=0)
-    competencia_id: int = Field(gt=0)
+    competencia_id: Optional[int] = Field(default=None, gt=0)
     texto: str = Field(min_length=3, max_length=4000)
     exemplo_esperado: Optional[str] = Field(default=None, max_length=8000)
     ordem: Optional[int] = Field(default=None, gt=0)
@@ -49,9 +53,11 @@ class PerguntaAtualizar(BaseModel):
     usa_star: bool = False
     area_tecnica_id: Optional[int] = Field(default=None, gt=0)
     subarea_tecnica_id: Optional[int] = Field(default=None, gt=0)
+    codigo: Optional[str] = Field(default=None, min_length=3, max_length=30)
+    dificuldade: Optional[str] = Field(default=None, pattern="^(basica|intermediaria|avancada)$")
 
 
-# Agrupa as rotas relacionadas às perguntas.
+# Organiza as rotas relacionadas às perguntas.
 router = APIRouter(prefix="/perguntas", tags=["Perguntas"])
 
 
@@ -64,19 +70,22 @@ def listar(
     subarea_tecnica_id: Optional[int] = Query(default=None, gt=0),
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
-    """Lista perguntas e permite filtrar por tipo, competência, área e subárea."""
-    # Estudantes nunca podem solicitar perguntas indisponíveis ou inativas.
+    """Lista perguntas, aplicando filtros e respeitando o perfil do usuário."""
+    # Estudantes não podem consultar perguntas inativas.
     if usuario.perfil != "administrador":
         somente_ativas = True
 
     try:
-        return listar_perguntas(
+        perguntas = listar_perguntas(
             somente_ativas=somente_ativas,
             tipo_entrevista_id=tipo_entrevista_id,
             competencia_id=competencia_id,
             area_tecnica_id=area_tecnica_id,
             subarea_tecnica_id=subarea_tecnica_id
         )
+        if usuario.perfil == "administrador":
+            return perguntas
+        return [replace(pergunta, exemplo_esperado=None) for pergunta in perguntas]
     except ValueError as erro:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -89,9 +98,9 @@ def consultar(
     pergunta_id: int,
     usuario: Usuario = Depends(obter_usuario_atual)
 ):
-    """Consulta uma pergunta e aplica uma regra diferente para estudante e administrador."""
+    """Consulta uma pergunta, respeitando a visibilidade de cada perfil."""
     try:
-        # O administrador pode consultar perguntas inativas; o estudante não pode.
+        # Administradores podem consultar perguntas inativas.
         if usuario.perfil == "administrador":
             pergunta = buscar_pergunta(pergunta_id)
         else:
@@ -103,7 +112,9 @@ def consultar(
                 detail="Pergunta não encontrada."
             )
 
-        return pergunta
+        if usuario.perfil == "administrador":
+            return pergunta
+        return replace(pergunta, exemplo_esperado=None)
 
     except ValueError as erro:
         raise HTTPException(
@@ -117,9 +128,9 @@ def cadastrar(
     dados: PerguntaCriar,
     administrador: Usuario = Depends(obter_administrador_atual)
 ):
-    """Cadastra uma nova pergunta respeitando as regras do tipo de entrevista escolhido."""
+    """Cadastra uma pergunta após validar seu tipo e seus relacionamentos."""
     try:
-        # A camada de serviço decide se área e subárea são obrigatórias pelo campo usa_area_tecnica.
+        # A competência pode ser nula apenas quando o serviço permitir.
         pergunta = Pergunta(
             tipo_entrevista_id=dados.tipo_entrevista_id,
             competencia_id=dados.competencia_id,
@@ -130,7 +141,9 @@ def cadastrar(
             peso=dados.peso,
             usa_star=dados.usa_star,
             area_tecnica_id=dados.area_tecnica_id,
-            subarea_tecnica_id=dados.subarea_tecnica_id
+            subarea_tecnica_id=dados.subarea_tecnica_id,
+            codigo=dados.codigo,
+            dificuldade=dados.dificuldade
         )
 
         pergunta_id = cadastrar_pergunta(pergunta)
@@ -157,7 +170,7 @@ def atualizar(
     dados: PerguntaAtualizar,
     administrador: Usuario = Depends(obter_administrador_atual)
 ):
-    """Atualiza uma pergunta mantendo o status e a data de criação já registrados."""
+    """Atualiza uma pergunta preservando seu status e seus dados históricos."""
     try:
         pergunta_atual = buscar_pergunta(pergunta_id)
 
@@ -167,11 +180,16 @@ def atualizar(
                 detail="Pergunta não encontrada."
             )
 
-        # A edição troca os dados de conteúdo, mas preserva status e data histórica do cadastro.
+        # Os novos campos preservam os valores existentes quando não são enviados.
+        # A competência também é preservada quando não aparece na requisição.
+        competencia_id = dados.competencia_id
+        if "competencia_id" not in dados.model_fields_set:
+            competencia_id = pergunta_atual.competencia_id
+
         pergunta = Pergunta(
             id=pergunta_id,
             tipo_entrevista_id=dados.tipo_entrevista_id,
-            competencia_id=dados.competencia_id,
+            competencia_id=competencia_id,
             texto=dados.texto,
             exemplo_esperado=dados.exemplo_esperado,
             ordem=dados.ordem,
@@ -180,13 +198,12 @@ def atualizar(
             usa_star=dados.usa_star,
             area_tecnica_id=dados.area_tecnica_id,
             subarea_tecnica_id=dados.subarea_tecnica_id,
-            data_criacao=pergunta_atual.data_criacao
+            data_criacao=pergunta_atual.data_criacao,
+            codigo=dados.codigo if "codigo" in dados.model_fields_set else pergunta_atual.codigo,
+            dificuldade=dados.dificuldade if "dificuldade" in dados.model_fields_set else pergunta_atual.dificuldade
         )
 
-        alterada = editar_pergunta(
-            pergunta_id,
-            pergunta
-        )
+        alterada = editar_pergunta(pergunta_id, pergunta)
 
         if not alterada:
             raise HTTPException(
@@ -240,7 +257,7 @@ def ativar(
     pergunta_id: int,
     administrador: Usuario = Depends(obter_administrador_atual)
 ):
-    """Reativa uma pergunta somente quando todos os vínculos necessários continuam válidos."""
+    """Reativa uma pergunta somente quando seus relacionamentos estão válidos."""
     try:
         pergunta = buscar_pergunta(pergunta_id)
 
@@ -250,7 +267,7 @@ def ativar(
                 detail="Pergunta não encontrada."
             )
 
-        # O serviço confere tipo, competência, área, subárea e os respectivos status.
+        # A camada de serviço verifica tipo, competência, área e subárea.
         alterada = reativar_pergunta(pergunta_id)
 
         if not alterada:

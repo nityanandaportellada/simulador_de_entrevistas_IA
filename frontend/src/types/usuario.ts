@@ -6,7 +6,7 @@ export interface Usuario {
   email: string
   perfil: PerfilUsuario
   ativo: boolean
-  data_criacao: string
+  data_criacao: string | null
   ultimo_acesso: string | null
 }
 

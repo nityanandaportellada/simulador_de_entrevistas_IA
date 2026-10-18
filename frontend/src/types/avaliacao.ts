@@ -15,6 +15,9 @@ export interface DestaqueCriterio {
 
 export interface ResultadoFinalAnalise {
   entrevista_id: number
+  tipo_entrevista: string | null
+  area_tecnica: string | null
+  subarea_tecnica: string | null
   pontuacao_final: number
   classificacao: string
   desempenho_criterios: DesempenhoCriterio[]
@@ -26,6 +29,7 @@ export interface AnaliseEntrevistaResponse {
   entrevista_id: number
   modo_analise: 'mock' | 'openai'
   modelo: string
+  quantidade_criterios_aplicados: number
   avaliacoes: number[]
   resultado_final: ResultadoFinalAnalise
 }

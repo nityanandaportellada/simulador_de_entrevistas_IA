@@ -1,3 +1,4 @@
+
 """Funções responsáveis pelo registro e pela consulta das respostas das entrevistas."""
 
 import sqlite3
@@ -12,27 +13,26 @@ except ImportError:
 
 def _validar_id(valor: int | None, campo: str) -> None:
     """Confere se um identificador foi informado e é maior que zero."""
-    if valor is None or valor <= 0:
+    if type(valor) is not int or valor <= 0:
         raise ValueError(f"{campo} inválido.")
 
 
 def _validar_texto_resposta(texto_resposta: str) -> str:
     """Valida o texto e devolve a resposta sem espaços extras nas extremidades."""
-    if texto_resposta is None:
-        raise ValueError("A resposta é obrigatória.")
-
+    if not isinstance(texto_resposta, str):
+        raise ValueError("A resposta deve ser um texto.")
     texto = texto_resposta.strip()
-
     if not texto:
         raise ValueError("A resposta não pode estar vazia.")
-
+    if len(texto) > 10000:
+        raise ValueError("A resposta deve ter no máximo 10.000 caracteres.")
     return texto
 
 
 def _validar_tempo_resposta(tempo_resposta: int | None) -> None:
     """Impede o registro de um tempo de resposta negativo."""
-    if tempo_resposta is not None and tempo_resposta < 0:
-        raise ValueError("O tempo de resposta não pode ser negativo.")
+    if tempo_resposta is not None and (type(tempo_resposta) is not int or tempo_resposta < 0):
+        raise ValueError("O tempo de resposta deve ser um número inteiro não negativo.")
 
 
 def salvar_resposta(
@@ -56,7 +56,7 @@ def salvar_resposta(
 
         # Somente entrevistas em andamento podem receber respostas.
         cursor.execute(
-            "SELECT id, status FROM entrevistas WHERE id = ?",
+            "SELECT id, status, perfil_profissional FROM entrevistas WHERE id = ?",
             (entrevista_id,)
         )
         entrevista = cursor.fetchone()
@@ -97,20 +97,51 @@ def salvar_resposta(
             raise ValueError("A pergunta informada não pertence ao conjunto de perguntas desta entrevista.")
 
         # Os campos históricos necessários precisam existir antes de salvar a resposta.
-        if pergunta_aplicada["pergunta_texto_aplicado"] is None:
+        if not (pergunta_aplicada["pergunta_texto_aplicado"] or "").strip():
             raise ValueError("A pergunta da entrevista não possui snapshot histórico válido.")
 
-        if pergunta_aplicada["competencia_id_aplicada"] is None:
+        # Competência é obrigatória para perguntas comportamentais, mas não para técnicas.
+        tecnica = pergunta_aplicada["area_tecnica_id_aplicada"] is not None and pergunta_aplicada["subarea_tecnica_id_aplicada"] is not None
+        if not tecnica and pergunta_aplicada["competencia_id_aplicada"] is None:
             raise ValueError("A pergunta da entrevista não possui competência histórica válida.")
-
-        if pergunta_aplicada["competencia_nome_aplicada"] is None:
+        if not tecnica and pergunta_aplicada["competencia_nome_aplicada"] is None:
             raise ValueError("A pergunta da entrevista não possui nome histórico da competência.")
+        if (pergunta_aplicada["competencia_id_aplicada"] is None) != (pergunta_aplicada["competencia_nome_aplicada"] is None):
+            raise ValueError("A pergunta da entrevista possui competência histórica incompleta.")
 
-        if pergunta_aplicada["peso_pergunta_aplicado"] is None:
+        if pergunta_aplicada["peso_pergunta_aplicado"] is None or pergunta_aplicada["peso_pergunta_aplicado"] <= 0:
             raise ValueError("A pergunta da entrevista não possui peso histórico válido.")
-
-        if pergunta_aplicada["usa_star_aplicado"] is None:
+        if pergunta_aplicada["usa_star_aplicado"] not in (0, 1):
             raise ValueError("A pergunta da entrevista não possui configuração histórica do método STAR.")
+
+        # O perfil obrigatório identifica entrevistas novas com oito perguntas sequenciais.
+        if entrevista["perfil_profissional"] is not None:
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS total, COUNT(DISTINCT ordem_pergunta_aplicada) AS ordens,
+                       MIN(ordem_pergunta_aplicada) AS primeira, MAX(ordem_pergunta_aplicada) AS ultima
+                FROM entrevista_perguntas WHERE entrevista_id = ?
+                """, (entrevista_id,)
+            )
+            conjunto = cursor.fetchone()
+            if conjunto["total"] != 8 or conjunto["ordens"] != 8 or conjunto["primeira"] != 1 or conjunto["ultima"] != 8:
+                raise ValueError("O conjunto de oito perguntas da entrevista está inconsistente.")
+            # Só é permitido responder à primeira pergunta ainda pendente.
+            cursor.execute(
+                """
+                SELECT ep.pergunta_id FROM entrevista_perguntas ep
+                WHERE ep.entrevista_id = ? AND NOT EXISTS (
+                    SELECT 1 FROM respostas r
+                    WHERE r.entrevista_id = ep.entrevista_id AND r.pergunta_id = ep.pergunta_id
+                )
+                ORDER BY ep.ordem_pergunta_aplicada, ep.id LIMIT 1
+                """, (entrevista_id,)
+            )
+            proxima = cursor.fetchone()
+            if proxima is None:
+                raise ValueError("Todas as perguntas desta entrevista já foram respondidas.")
+            if proxima["pergunta_id"] != pergunta_id:
+                raise ValueError("Responda às perguntas na sequência definida pela entrevista.")
 
         # Faz uma verificação simples antes do INSERT para devolver uma mensagem clara.
         cursor.execute(
@@ -267,12 +298,22 @@ def buscar_snapshot_resposta(resposta_id: int) -> dict | None:
         # Não usa a tabela perguntas para reconstruir dados históricos ausentes.
         if (
             registro["pergunta_texto_aplicado"] is None
-            or registro["competencia_id_aplicada"] is None
-            or registro["competencia_nome_aplicada"] is None
             or registro["peso_pergunta_aplicado"] is None
             or registro["usa_star_aplicado"] is None
         ):
             raise ValueError("A resposta não possui snapshot histórico completo da pergunta.")
+
+        # Uma competência ausente é válida somente para perguntas técnicas congeladas.
+        cursor.execute(
+            "SELECT area_tecnica_id_aplicada, subarea_tecnica_id_aplicada FROM entrevista_perguntas WHERE entrevista_id = ? AND pergunta_id = ?",
+            (registro["entrevista_id"], registro["pergunta_id"])
+        )
+        pergunta_aplicada = cursor.fetchone()
+        tecnica = pergunta_aplicada is not None and pergunta_aplicada["area_tecnica_id_aplicada"] is not None and pergunta_aplicada["subarea_tecnica_id_aplicada"] is not None
+        if not tecnica and (registro["competencia_id_aplicada"] is None or registro["competencia_nome_aplicada"] is None):
+            raise ValueError("A resposta não possui competência histórica válida.")
+        if (registro["competencia_id_aplicada"] is None) != (registro["competencia_nome_aplicada"] is None):
+            raise ValueError("A resposta possui competência histórica incompleta.")
 
         return {
             "id": registro["id"],
@@ -321,90 +362,27 @@ def editar_resposta(
     novo_texto: str,
     tempo_resposta: int | None = None
 ) -> bool:
-    """Edita uma resposta somente enquanto a entrevista estiver em andamento."""
+    """Impede alterações: depois do envio, a resposta é definitiva."""
     _validar_id(resposta_id, "ID da resposta")
-    texto = _validar_texto_resposta(novo_texto)
-    _validar_tempo_resposta(tempo_resposta)
-
     conexao = conectar_banco()
-    cursor = conexao.cursor()
-
     try:
-        cursor.execute("BEGIN IMMEDIATE")
-
-        # Busca também o status da entrevista antes de permitir a alteração.
-        cursor.execute(
-            """
-            SELECT r.id, e.status
-            FROM respostas r
-            INNER JOIN entrevistas e ON e.id = r.entrevista_id
-            WHERE r.id = ?
-            """,
-            (resposta_id,)
-        )
-        registro = cursor.fetchone()
-
+        registro = conexao.execute("SELECT id FROM respostas WHERE id = ?", (resposta_id,)).fetchone()
         if registro is None:
             raise ValueError("Resposta não encontrada.")
-
-        if registro["status"] != "em_andamento":
-            raise ValueError("A resposta não pode ser alterada porque a entrevista já foi encerrada.")
-
-        # Somente texto e tempo podem mudar. Os snapshots não são atualizados.
-        cursor.execute(
-            """
-            UPDATE respostas
-            SET texto_resposta = ?, tempo_resposta = ?
-            WHERE id = ?
-            """,
-            (texto, tempo_resposta, resposta_id)
-        )
-        alterada = cursor.rowcount > 0
-        conexao.commit()
-        return alterada
-
-    except (sqlite3.Error, ValueError):
-        conexao.rollback()
-        raise
+        raise ValueError("Respostas enviadas não podem ser editadas.")
     finally:
         conexao.close()
 
 
 def excluir_resposta(resposta_id: int) -> bool:
-    """Exclui uma resposta somente enquanto a entrevista estiver em andamento."""
+    """Impede exclusões de respostas já enviadas, preservando o histórico."""
     _validar_id(resposta_id, "ID da resposta")
     conexao = conectar_banco()
-    cursor = conexao.cursor()
-
     try:
-        cursor.execute("BEGIN IMMEDIATE")
-        cursor.execute(
-            """
-            SELECT r.id, e.status
-            FROM respostas r
-            INNER JOIN entrevistas e ON e.id = r.entrevista_id
-            WHERE r.id = ?
-            """,
-            (resposta_id,)
-        )
-        registro = cursor.fetchone()
-
+        registro = conexao.execute("SELECT id FROM respostas WHERE id = ?", (resposta_id,)).fetchone()
         if registro is None:
-            conexao.rollback()
             return False
-
-        if registro["status"] != "em_andamento":
-            raise ValueError("A resposta não pode ser excluída porque a entrevista já foi encerrada.")
-
-        # O conjunto congelado da entrevista não é apagado junto com a resposta.
-        cursor.execute("DELETE FROM respostas WHERE id = ?", (resposta_id,))
-        excluida = cursor.rowcount > 0
-        conexao.commit()
-        return excluida
-
-    except (sqlite3.Error, ValueError):
-        conexao.rollback()
-        raise
+        raise ValueError("Respostas enviadas não podem ser excluídas.")
     finally:
         conexao.close()
 

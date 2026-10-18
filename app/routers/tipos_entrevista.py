@@ -1,3 +1,4 @@
+
 """Rotas usadas para consultar e administrar os tipos de entrevista."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,7 +23,9 @@ router = APIRouter(prefix="/tipos-entrevista", tags=["Tipos de Entrevista"])
 @router.get("", response_model=list[TipoEntrevistaResposta])
 def listar(somente_ativos: bool = False, usuario: Usuario = Depends(obter_usuario_atual)):
     """Lista os tipos de entrevista para qualquer usuário autenticado."""
-    # O parâmetro permite que a interface peça somente os tipos disponíveis.
+    # Estudantes consultam apenas tipos ativos, independentemente do parâmetro.
+    if usuario.perfil != "administrador":
+        somente_ativos = True
     return listar_tipos_entrevista(somente_ativos=somente_ativos)
 
 
@@ -35,7 +38,7 @@ def consultar(tipo_entrevista_id: int, usuario: Usuario = Depends(obter_usuario_
         # Erros de validação do serviço são devolvidos como requisição inválida.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
-    if tipo is None:
+    if tipo is None or (usuario.perfil != "administrador" and not tipo["ativo"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tipo de entrevista não encontrado.")
 
     return tipo

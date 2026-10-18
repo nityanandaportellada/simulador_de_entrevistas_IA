@@ -1,3 +1,4 @@
+
 """Rotas usadas para consultar e administrar os critérios de avaliação."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -30,6 +31,9 @@ def resumo_pesos(administrador: Usuario = Depends(obter_administrador_atual)):
 @router.get("", response_model=list[CriterioResposta])
 def listar(somente_ativos: bool = False, usuario: Usuario = Depends(obter_usuario_atual)):
     """Lista os critérios de avaliação para qualquer usuário autenticado."""
+    # Critérios inativos só podem ser consultados pelo administrador.
+    if usuario.perfil != "administrador":
+        somente_ativos = True
     return listar_criterios(somente_ativos=somente_ativos)
 
 
@@ -41,7 +45,7 @@ def consultar(criterio_id: int, usuario: Usuario = Depends(obter_usuario_atual))
     except ValueError as erro:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(erro))
 
-    if criterio is None:
+    if criterio is None or (usuario.perfil != "administrador" and not criterio["ativo"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Critério não encontrado.")
 
     return criterio

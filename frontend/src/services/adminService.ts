@@ -6,10 +6,12 @@ import type {
   Usuario
 } from '../types/usuario'
 import type {
+  AreaTecnica,
   Competencia,
   CompetenciaRequest,
   CriterioAvaliacao,
   CriterioAvaliacaoRequest,
+  SubareaTecnica,
   TipoEntrevista,
   TipoEntrevistaRequest
 } from '../types/catalogos'
@@ -31,7 +33,8 @@ export const adminService = {
   ativarUsuario: (id: number) =>
     apiPut<MensagemResponse>(`/usuarios/${id}/ativar`),
 
-  tipos: () => apiGet<TipoEntrevista[]>('/tipos-entrevista'),
+  tipos: () =>
+    apiGet<TipoEntrevista[]>('/tipos-entrevista'),
   criarTipo: (body: TipoEntrevistaRequest) =>
     apiPost<TipoEntrevista, TipoEntrevistaRequest>(
       '/tipos-entrevista',
@@ -47,9 +50,13 @@ export const adminService = {
   ativarTipo: (id: number) =>
     apiPut<TipoEntrevista>(`/tipos-entrevista/${id}/ativar`),
 
-  competencias: () => apiGet<Competencia[]>('/competencias'),
+  competencias: () =>
+    apiGet<Competencia[]>('/competencias'),
   criarCompetencia: (body: CompetenciaRequest) =>
-    apiPost<Competencia, CompetenciaRequest>('/competencias', body),
+    apiPost<Competencia, CompetenciaRequest>(
+      '/competencias',
+      body
+    ),
   editarCompetencia: (id: number, body: CompetenciaRequest) =>
     apiPut<Competencia, CompetenciaRequest>(
       `/competencias/${id}`,
@@ -60,7 +67,8 @@ export const adminService = {
   ativarCompetencia: (id: number) =>
     apiPut<Competencia>(`/competencias/${id}/ativar`),
 
-  criterios: () => apiGet<CriterioAvaliacao[]>('/criterios'),
+  criterios: () =>
+    apiGet<CriterioAvaliacao[]>('/criterios'),
   criarCriterio: (body: CriterioAvaliacaoRequest) =>
     apiPost<CriterioAvaliacao, CriterioAvaliacaoRequest>(
       '/criterios',
@@ -76,13 +84,30 @@ export const adminService = {
   ativarCriterio: (id: number) =>
     apiPut<CriterioAvaliacao>(`/criterios/${id}/ativar`),
 
-  perguntas: () => apiGet<Pergunta[]>('/perguntas'),
+  areas: () =>
+    apiGet<AreaTecnica[]>('/areas-tecnicas?somente_ativas=false'),
+
+  subareas: () =>
+    apiGet<SubareaTecnica[]>('/subareas-tecnicas?somente_ativas=false'),
+
+  perguntas: () =>
+    apiGet<Pergunta[]>('/perguntas?somente_ativas=false'),
+
   criarPergunta: (body: PerguntaRequest) =>
-    apiPost<Pergunta, PerguntaRequest>('/perguntas', body),
+    apiPost<Pergunta, PerguntaRequest>(
+      '/perguntas',
+      body
+    ),
+
   editarPergunta: (id: number, body: PerguntaRequest) =>
-    apiPut<Pergunta, PerguntaRequest>(`/perguntas/${id}`, body),
+    apiPut<Pergunta, PerguntaRequest>(
+      `/perguntas/${id}`,
+      body
+    ),
+
   inativarPergunta: (id: number) =>
-    apiPut<MensagemResponse>(`/perguntas/${id}/inativar`),
+    apiPut<Pergunta>(`/perguntas/${id}/inativar`),
+
   ativarPergunta: (id: number) =>
     apiPut<AtivarPerguntaResponse>(`/perguntas/${id}/ativar`)
 }

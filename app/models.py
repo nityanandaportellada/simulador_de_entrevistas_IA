@@ -1,3 +1,4 @@
+
 """Modelos de dados usados pelo Simulador de Entrevistas."""
 
 from dataclasses import dataclass
@@ -121,6 +122,10 @@ class Pergunta:
     area_tecnica_id: int | None = None
     subarea_tecnica_id: int | None = None
 
+    # Identificação e nível de dificuldade para a seleção automática.
+    codigo: str | None = None
+    dificuldade: str | None = None
+
 
 # ============================================================
 # ENTREVISTA
@@ -151,6 +156,9 @@ class Entrevista:
     area_tecnica_nome_aplicado: str | None = None
     subarea_tecnica_nome_aplicado: str | None = None
 
+    # Perfil profissional utilizado para definir a dificuldade das perguntas.
+    perfil_profissional: str | None = None
+
 
 # ============================================================
 # PERGUNTA APLICADA À ENTREVISTA
@@ -167,10 +175,12 @@ class EntrevistaPergunta:
     # Snapshot da pergunta.
     pergunta_texto_aplicado: str = ""
     exemplo_esperado_aplicado: str | None = None
+    codigo_pergunta_aplicado: str | None = None
+    dificuldade_aplicada: str | None = None
 
-    # Snapshot da competência.
+    # Snapshot da competência, que pode ser ausente nas perguntas técnicas.
     competencia_id_aplicada: int | None = None
-    competencia_nome_aplicada: str = ""
+    competencia_nome_aplicada: str | None = None
 
     # Snapshot da área técnica.
     area_tecnica_id_aplicada: int | None = None

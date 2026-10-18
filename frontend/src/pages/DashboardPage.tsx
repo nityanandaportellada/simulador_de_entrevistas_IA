@@ -1,146 +1,288 @@
+
 import { useEffect, useMemo, useState } from 'react'
 import { BarChart3, CheckCircle2, FileText, Star } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Loading } from '../components/Loading'
 import { MetricCard } from '../components/MetricCard'
 import { studentService } from '../services/studentService'
-import type { EvolucaoPontuacao, ItemHistorico, ResumoHistorico } from '../types/historico'
+import type { EvolucaoCriterios, EvolucaoPontuacao, ItemHistorico, ResumoHistorico } from '../types/historico'
+
+const NOMES_STATUS: Record<ItemHistorico['status'], string> = {
+  em_andamento: 'Em andamento', finalizada: 'Finalizada', em_analise: 'Em análise',
+  avaliada: 'Avaliada', erro_analise: 'Erro na análise', cancelada: 'Cancelada'
+}
+
+function formatarData(valor: string): string {
+  const data = new Date(valor.includes('T') ? valor : `${valor.replace(' ', 'T')}Z`)
+  return Number.isNaN(data.getTime()) ? valor : data.toLocaleDateString('pt-BR')
+}
 
 export function DashboardPage() {
   const [resumo, setResumo] = useState<ResumoHistorico | null>(null)
   const [historico, setHistorico] = useState<ItemHistorico[]>([])
   const [evolucao, setEvolucao] = useState<EvolucaoPontuacao[]>([])
-  const [criterios, setCriterios] = useState<any>(null)
+  const [evolucaoCriterios, setEvolucaoCriterios] = useState<EvolucaoCriterios[]>([])
   const [loading, setLoading] = useState(true)
+  const [erro, setErro] = useState('')
+  const [tentativa, setTentativa] = useState(0)
+  const [tipoFiltro, setTipoFiltro] = useState('todos')
 
   useEffect(() => {
+    let ativo = true
+    setLoading(true)
+    setErro('')
+
     Promise.all([
       studentService.resumo(),
       studentService.historico(),
       studentService.evolucao(),
       studentService.evolucaoCriterios()
     ])
-      .then(([r, h, e, c]) => {
-        setResumo(r)
-        setHistorico(h)
-        setEvolucao(e)
-        setCriterios(c)
+      .then(([dadosResumo, dadosHistorico, dadosEvolucao, dadosCriterios]) => {
+        if (!ativo) return
+        setResumo(dadosResumo)
+        setHistorico(dadosHistorico)
+        setEvolucao(dadosEvolucao)
+        setEvolucaoCriterios(dadosCriterios)
       })
-      .finally(() => setLoading(false))
-  }, [])
+      .catch((falha: unknown) => {
+        if (ativo) setErro(falha instanceof Error ? falha.message : 'Erro ao carregar os indicadores.')
+      })
+      .finally(() => { if (ativo) setLoading(false) })
+
+    return () => { ativo = false }
+  }, [tentativa])
+
+  const tipos = useMemo(() => {
+    const unicos = new Map<number, string>()
+    historico.forEach((item) => {
+      unicos.set(item.tipo_entrevista_id, item.tipo_entrevista ?? `Tipo ${item.tipo_entrevista_id}`)
+    })
+    return [...unicos].sort((a, b) => a[1].localeCompare(b[1], 'pt-BR'))
+  }, [historico])
+
+  const evolucaoFiltrada = useMemo(() =>
+    evolucao.filter((item) => tipoFiltro === 'todos' || item.tipo_entrevista_id === Number(tipoFiltro)),
+    [evolucao, tipoFiltro]
+  )
+
+  const criteriosFiltrados = useMemo(() =>
+    evolucaoCriterios.filter((item) => tipoFiltro === 'todos' || item.tipo_entrevista_id === Number(tipoFiltro)),
+    [evolucaoCriterios, tipoFiltro]
+  )
+
+  const ultimasNotas = evolucaoFiltrada.slice(-12)
+  const criteriosRecentes = criteriosFiltrados.length
+    ? criteriosFiltrados[criteriosFiltrados.length - 1].criterios
+    : []
+
+  const ultima = evolucaoFiltrada[evolucaoFiltrada.length - 1]
+  const primeira = evolucaoFiltrada[0]
+
+  const mediaFiltrada = evolucaoFiltrada.length
+    ? evolucaoFiltrada.reduce((soma, item) => soma + item.pontuacao, 0) / evolucaoFiltrada.length
+    : null
 
   const ultimas = useMemo(() => historico.slice(0, 5), [historico])
 
   if (loading) return <Loading />
 
-  const criterioRows = Array.isArray(criterios)
-    ? criterios.slice(0, 5)
-    : []
+  if (erro) return (
+    <section className="panel">
+      <h1>Dashboard indisponível</h1>
+      <p role="alert" className="alert alert--error">{erro}</p>
+      <button className="button button--primary" type="button" onClick={() => setTentativa((valor) => valor + 1)}>
+        Tentar novamente
+      </button>
+    </section>
+  )
 
   return (
     <div>
       <div className="page-heading">
         <div>
           <h1>Dashboard</h1>
-          <p>Acompanhe seu desempenho no simulador de entrevistas.</p>
+          <p>Acompanhe os resultados das suas entrevistas ao longo do tempo.</p>
         </div>
       </div>
 
       <div className="metric-grid metric-grid--4">
         <MetricCard label="Entrevistas realizadas" value={resumo?.quantidade_total ?? 0} icon={<FileText />} />
         <MetricCard label="Entrevistas avaliadas" value={resumo?.quantidade_avaliada ?? 0} icon={<CheckCircle2 />} />
-        <MetricCard label="Média das pontuações" value={resumo?.media_pontuacoes?.toFixed(2) ?? '-'} icon={<BarChart3 />} />
+        <MetricCard label="Média geral (0 a 10)" value={resumo?.media_pontuacoes?.toFixed(2) ?? '-'} icon={<BarChart3 />} />
         <MetricCard label="Última pontuação" value={resumo?.ultima_pontuacao?.toFixed(2) ?? '-'} icon={<Star />} />
       </div>
 
-      <div className="two-column">
-        <section className="panel">
-          <div className="panel__heading">
-            <div>
-              <h2>Evolução das pontuações</h2>
-              <p>Últimas entrevistas avaliadas.</p>
-            </div>
-          </div>
-          <div className="mini-chart">
-            {evolucao.length === 0 ? (
-              <div className="empty-state">Ainda não há evolução disponível.</div>
-            ) : (
-              evolucao.map((item, index) => (
-                <div className="mini-chart__item" key={item.entrevista_id}>
-                  <div className="mini-chart__bar" style={{ height: `${Math.max(12, item.pontuacao * 9)}%` }} />
-                  <span>{index + 1}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
+      <section className="panel">
+        <div className="panel__heading">
+          <h2>Evolução por modalidade</h2>
+          <p>Selecione uma modalidade para comparar avaliações equivalentes. As notas são exibidas em ordem cronológica.</p>
+        </div>
 
-        <section className="panel">
-          <div className="panel__heading">
-            <div>
-              <h2>Desempenho por critérios</h2>
-              <p>Média dos critérios disponíveis no histórico.</p>
-            </div>
-          </div>
+        <label className="field" style={{ maxWidth: 430, marginBottom: '1rem' }}>
+          Modalidade
+          <select value={tipoFiltro} onChange={(evento) => setTipoFiltro(evento.target.value)}>
+            <option value="todos">Todas as modalidades (visão geral)</option>
+            {tipos.map(([id, nome]) => <option key={id} value={id}>{nome}</option>)}
+          </select>
+        </label>
 
-          {criterioRows.length > 0 ? (
-            <div className="progress-list">
-              {criterioRows.map((item: any, index: number) => (
-                <div key={item.criterio_id ?? index} className="progress-row">
-                  <span>{item.criterio ?? `Critério ${index + 1}`}</span>
-                  <div className="progress"><div style={{ width: `${Math.min(100, Number(item.media ?? 0) * 10)}%` }} /></div>
-                  <strong>{Number(item.media ?? 0).toFixed(1)}</strong>
+        <div className="interview-summary">
+          <div>
+            <span>Avaliações selecionadas</span>
+            <strong>{evolucaoFiltrada.length}</strong>
+          </div>
+          <div>
+            <span>Média selecionada</span>
+            <strong>{mediaFiltrada === null ? '-' : `${mediaFiltrada.toFixed(2)}/10`}</strong>
+          </div>
+          <div>
+            <span>Variação primeira → última</span>
+            <strong>
+              {primeira && ultima && evolucaoFiltrada.length >= 2
+                ? `${ultima.pontuacao - primeira.pontuacao > 0 ? '+' : ''}${(ultima.pontuacao - primeira.pontuacao).toFixed(2)} ponto(s)`
+                : '-'}
+            </strong>
+          </div>
+        </div>
+
+        {ultimasNotas.length === 0 ? (
+          <div className="empty-state">Nenhuma entrevista avaliada nesta modalidade.</div>
+        ) : (
+          <div
+            className="mini-chart"
+            role="group"
+            aria-label="Últimas pontuações avaliadas em ordem cronológica"
+            style={{ marginTop: '1rem' }}
+          >
+            {ultimasNotas.map((item) => (
+              <div
+                className="mini-chart__item"
+                key={item.entrevista_id}
+                title={`Entrevista #${item.entrevista_id} — ${formatarData(item.data)} — ${item.pontuacao.toFixed(2)}/10`}
+              >
+                <strong style={{ fontSize: '.8rem' }}>{item.pontuacao.toFixed(1)}</strong>
+                <div
+                  className="mini-chart__bar"
+                  style={{ height: `${Math.max(2, Math.min(100, item.pontuacao * 10))}%` }}
+                />
+                <Link to={`/relatorios/${item.entrevista_id}`} style={{ fontSize: '.75rem' }}>
+                  #{item.entrevista_id}
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {evolucaoFiltrada.length > 12 && (
+          <p className="note">
+            O gráfico mostra as últimas 12 avaliações da seleção.
+            A média considera todas as avaliações selecionadas.
+          </p>
+        )}
+
+        {tipoFiltro === 'todos' && evolucaoFiltrada.length > 1 && (
+          <p className="note">
+            Entrevistas de modalidades diferentes podem avaliar habilidades distintas.
+            Use o filtro para uma comparação mais consistente.
+          </p>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel__heading">
+          <h2>Critérios da avaliação mais recente</h2>
+          <p>Critérios e médias da última entrevista avaliada dentro do filtro de modalidade.</p>
+        </div>
+
+        {criteriosRecentes.length === 0 ? (
+          <div className="empty-state">Ainda não há critérios avaliados para esta modalidade.</div>
+        ) : (
+          <div className="progress-list">
+            {criteriosRecentes.map((item) => (
+              <div className="progress-row" key={item.criterio_id}>
+                <span title={item.criterio_descricao ?? undefined}>{item.criterio}</span>
+                <div
+                  className="progress"
+                  role="progressbar"
+                  aria-label={item.criterio}
+                  aria-valuemin={0}
+                  aria-valuemax={10}
+                  aria-valuenow={item.media}
+                >
+                  <div style={{ width: `${Math.max(0, Math.min(100, item.media * 10))}%` }} />
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state">Os critérios aparecerão após as primeiras avaliações.</div>
-          )}
-        </section>
-      </div>
+                <strong>{item.media.toFixed(1)}</strong>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="panel">
         <div className="panel__heading panel__heading--actions">
           <div>
             <h2>Últimas entrevistas</h2>
-            <p>Suas entrevistas mais recentes no simulador.</p>
+            <p>Retome uma entrevista ou consulte um relatório já liberado.</p>
           </div>
           <div className="button-row">
-            <Link className="button button--primary" to="/entrevistas/nova">Iniciar nova entrevista</Link>
-            <Link className="button button--outline" to="/historico">Ver histórico</Link>
+            <Link className="button button--primary" to="/entrevistas/nova">Nova entrevista</Link>
+            <Link className="button button--outline" to="/historico">Histórico completo</Link>
           </div>
         </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Tipo</th>
-                <th>Data</th>
-                <th>Status</th>
-                <th>Pontuação</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {ultimas.map((item) => (
-                <tr key={item.id}>
-                  <td>#{item.id}</td>
-                  <td>Tipo {item.tipo_entrevista_id}</td>
-                  <td>{item.data_inicio}</td>
-                  <td><span className={`status status--${item.status}`}>{item.status}</span></td>
-                  <td>{item.pontuacao_final ?? '-'}</td>
-                  <td>
-                    {item.status === 'avaliada' && (
-                      <Link to={`/relatorios/${item.id}`}>Ver detalhes</Link>
-                    )}
-                  </td>
+        {ultimas.length === 0 ? (
+          <div className="empty-state">Você ainda não iniciou nenhuma entrevista.</div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Modalidade</th>
+                  <th>Data</th>
+                  <th>Situação</th>
+                  <th>Nota</th>
+                  <th>Ação</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {ultimas.map((item) => (
+                  <tr key={item.id}>
+                    <td>#{item.id}</td>
+                    <td>
+                      {item.tipo_entrevista ?? `Tipo ${item.tipo_entrevista_id}`}
+                      {item.area_tecnica && (
+                        <div>
+                          <small>
+                            {item.area_tecnica}
+                            {item.subarea_tecnica ? ` / ${item.subarea_tecnica}` : ''}
+                          </small>
+                        </div>
+                      )}
+                    </td>
+                    <td>{formatarData(item.data_inicio)}</td>
+                    <td>
+                      <span className={`status status--${item.status}`}>{NOMES_STATUS[item.status]}</span>
+                    </td>
+                    <td>
+                      {item.status === 'avaliada' && item.pontuacao_final !== null
+                        ? item.pontuacao_final.toFixed(2)
+                        : '-'}
+                    </td>
+                    <td>
+                      {item.status === 'avaliada' ? (
+                        <Link to={`/relatorios/${item.id}`}>Relatório</Link>
+                      ) : item.status === 'cancelada' ? '-' : (
+                        <Link to={`/entrevistas/${item.id}`}>Ver entrevista</Link>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   )

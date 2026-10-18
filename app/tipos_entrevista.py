@@ -47,7 +47,8 @@ def _registro_para_dict(registro: sqlite3.Row) -> dict:
     return {
         "id": registro["id"],
         "nome": registro["nome"],
-        "ativo": bool(registro["ativo"])
+        "ativo": bool(registro["ativo"]),
+        "usa_area_tecnica": bool(registro["usa_area_tecnica"])
     }
 
 
@@ -130,7 +131,7 @@ def listar_tipos_entrevista(somente_ativos: bool = False) -> list[dict]:
         if somente_ativos:
             cursor.execute(
                 """
-                SELECT id, nome, ativo
+                SELECT id, nome, ativo, usa_area_tecnica
                 FROM tipos_entrevista
                 WHERE ativo = 1
                 ORDER BY nome COLLATE NOCASE, id
@@ -139,7 +140,7 @@ def listar_tipos_entrevista(somente_ativos: bool = False) -> list[dict]:
         else:
             cursor.execute(
                 """
-                SELECT id, nome, ativo
+                SELECT id, nome, ativo, usa_area_tecnica
                 FROM tipos_entrevista
                 ORDER BY nome COLLATE NOCASE, id
                 """
@@ -165,7 +166,7 @@ def buscar_tipo_entrevista(tipo_entrevista_id: int) -> dict | None:
     try:
         cursor.execute(
             """
-            SELECT id, nome, ativo
+            SELECT id, nome, ativo, usa_area_tecnica
             FROM tipos_entrevista
             WHERE id = ?
             """,
@@ -373,6 +374,7 @@ def obter_detalhes_tipo_entrevista(tipo_entrevista_id: int) -> dict | None:
         "id": tipo["id"],
         "nome": tipo["nome"],
         "ativo": tipo["ativo"],
+        "usa_area_tecnica": tipo["usa_area_tecnica"],
         "quantidade_perguntas": quantidade_perguntas,
         "quantidade_perguntas_ativas": quantidade_perguntas_ativas,
         "quantidade_entrevistas": quantidade_entrevistas,
