@@ -5,9 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { Loading } from '../components/Loading'
 import { studentService } from '../services/studentService'
 import type { AreaTecnica, SubareaTecnica, TipoEntrevista } from '../types/catalogos'
-import type { CriarEntrevistaRequest } from '../types/entrevista'
-
-type PerfilProfissional = 'estagio_trainee' | 'junior' | 'pleno' | 'senior'
+import type { CriarEntrevistaRequest, PerfilProfissional } from '../types/entrevista'
 
 const PERFIS: { valor: PerfilProfissional; nome: string; basicas: number; intermediarias: number; avancadas: number }[] = [
   { valor: 'estagio_trainee', nome: 'Estágio / Trainee', basicas: 5, intermediarias: 3, avancadas: 0 },
@@ -31,6 +29,7 @@ export function NovaEntrevistaPage() {
   const [subareaSelecionadaId, setSubareaSelecionadaId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [carregandoSubareas, setCarregandoSubareas] = useState(false)
+  const [tentativaSubareas, setTentativaSubareas] = useState(0)
   const [criando, setCriando] = useState(false)
   const [erroCarregamento, setErroCarregamento] = useState('')
   const [erroSubareas, setErroSubareas] = useState('')
@@ -64,9 +63,10 @@ export function NovaEntrevistaPage() {
     if (!precisaArea || areaSelecionadaId === null) return
     let ativo = true
     setCarregandoSubareas(true)
+    setErroSubareas('')
     studentService.listarSubareas(areaSelecionadaId)
       .then((recebidas) => {
-        if (ativo) setSubareas(recebidas.filter((subarea) => subarea.ativo))
+        if (ativo) setSubareas(recebidas.filter((subarea) => subarea.ativo && subarea.area_tecnica_id === areaSelecionadaId))
       })
       .catch((erro: unknown) => {
         if (ativo) setErroSubareas(mensagemErro(erro))
@@ -75,7 +75,7 @@ export function NovaEntrevistaPage() {
         if (ativo) setCarregandoSubareas(false)
       })
     return () => { ativo = false }
-  }, [areaSelecionadaId, precisaArea])
+  }, [areaSelecionadaId, precisaArea, tentativaSubareas])
 
   // Quando o tipo muda, limpa a área e a subárea anteriores.
   function selecionarTipo(tipoId: number) {
@@ -102,8 +102,9 @@ export function NovaEntrevistaPage() {
 
   // Impede iniciar uma entrevista com dados incompletos.
   const podeIniciar = Boolean(
-    tipoSelecionado && perfilSelecionado && !criando && !carregandoSubareas && !erroSubareas &&
-    (!precisaArea || (areaSelecionadaId !== null && subareaSelecionadaId !== null))
+    tipoSelecionado && perfilSelecionado && !criando && !loading && !carregandoSubareas && !erroSubareas &&
+    (!precisaArea || (areaSelecionadaId !== null && subareaSelecionadaId !== null &&
+      subareas.some((subarea) => subarea.id === subareaSelecionadaId && subarea.area_tecnica_id === areaSelecionadaId)))
   )
 
   // Envia o contexto escolhido ao backend e abre a entrevista criada.
@@ -113,8 +114,7 @@ export function NovaEntrevistaPage() {
     setCriando(true)
     try {
       // O backend utiliza o perfil para selecionar exatamente oito perguntas.
-      // A tipagem adicional é local para alterar somente esta página nesta etapa.
-      const dados: CriarEntrevistaRequest & { perfil_profissional: PerfilProfissional } = {
+      const dados: CriarEntrevistaRequest = {
         tipo_entrevista_id: tipoSelecionado.id,
         perfil_profissional: perfilSelecionado,
         ...(precisaArea ? { area_tecnica_id: areaSelecionadaId, subarea_tecnica_id: subareaSelecionadaId } : {})
@@ -249,9 +249,11 @@ export function NovaEntrevistaPage() {
               </div>
 
               {erroSubareas && (
-                <p className="note" role="alert">
-                  Não foi possível carregar as subáreas: {erroSubareas}
-                </p>
+                <div role="alert">
+                  <p className="note">Não foi possível carregar as subáreas: {erroSubareas}</p>
+                  <button type="button" className="button button--outline" disabled={criando || carregandoSubareas}
+                    onClick={() => setTentativaSubareas((anterior) => anterior + 1)}>Tentar carregar novamente</button>
+                </div>
               )}
 
               {!carregandoSubareas && areaSelecionadaId !== null && subareas.length === 0 && !erroSubareas && (

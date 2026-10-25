@@ -13,12 +13,13 @@ const SITUACOES: Record<ItemHistorico['status'], string> = {
 }
 
 function formatarData(valor: string): string {
-  const data = new Date(valor.includes('T') ? valor : `${valor.replace(' ', 'T')}Z`)
+  // Datas sem fuso no SQLite são horários locais, não UTC.
+  const data = new Date(valor.includes('T') ? valor : valor.replace(' ', 'T'))
   return Number.isNaN(data.getTime()) ? valor : data.toLocaleString('pt-BR')
 }
 
 function formatarNota(valor: number | null | undefined): string {
-  return valor === null || valor === undefined ? '-' : valor.toFixed(2)
+  return valor === null || valor === undefined || !Number.isFinite(valor) ? '-' : valor.toFixed(2)
 }
 
 function mensagemErro(erro: unknown): string {
@@ -31,6 +32,7 @@ export function HistoricoPage() {
   const [evolucaoCriterios, setEvolucaoCriterios] = useState<EvolucaoCriterios[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
+  const [erroCriterios, setErroCriterios] = useState('')
   const [tentativa, setTentativa] = useState(0)
   const [tipoFiltro, setTipoFiltro] = useState('todos')
   const [statusFiltro, setStatusFiltro] = useState('todos')
@@ -43,12 +45,20 @@ export function HistoricoPage() {
     let ativo = true
     setLoading(true)
     setErro('')
-    Promise.all([studentService.resumo(), studentService.historico(), studentService.evolucaoCriterios()])
-      .then(([dadosResumo, dadosHistorico, dadosCriterios]) => {
+    setErroCriterios('')
+    setResumo(null)
+    setHistorico([])
+    setEvolucaoCriterios([])
+    // O histórico permanece acessível se apenas a evolução por critérios falhar.
+    Promise.allSettled([studentService.resumo(), studentService.historico(), studentService.evolucaoCriterios()])
+      .then(([resultadoResumo, resultadoHistorico, resultadoCriterios]) => {
         if (!ativo) return
-        setResumo(dadosResumo)
-        setHistorico(dadosHistorico)
-        setEvolucaoCriterios(dadosCriterios)
+        if (resultadoResumo.status === 'rejected') throw resultadoResumo.reason
+        if (resultadoHistorico.status === 'rejected') throw resultadoHistorico.reason
+        setResumo(resultadoResumo.value)
+        setHistorico(resultadoHistorico.value)
+        if (resultadoCriterios.status === 'fulfilled') setEvolucaoCriterios(resultadoCriterios.value)
+        else setErroCriterios(mensagemErro(resultadoCriterios.reason))
       })
       .catch((falha: unknown) => { if (ativo) setErro(mensagemErro(falha)) })
       .finally(() => { if (ativo) setLoading(false) })
@@ -69,7 +79,7 @@ export function HistoricoPage() {
     return !termo || conteudo.includes(termo)
   }), [historico, tipoFiltro, statusFiltro, busca])
 
-  const avaliadas = useMemo(() => historico.filter((item) => item.status === 'avaliada' && item.pontuacao_final !== null), [historico])
+  const avaliadas = useMemo(() => historico.filter((item) => item.status === 'avaliada' && item.pontuacao_final !== null && Number.isFinite(item.pontuacao_final)), [historico])
   const primeira = avaliadas.find((item) => String(item.id) === primeiroId)
 
   // Compara somente a mesma modalidade e, para técnicas, a mesma área e subárea.
@@ -275,7 +285,16 @@ export function HistoricoPage() {
               Para evolução cronológica, use o Dashboard.
             </p>
 
-            {criteriosComparados.length > 0 && (
+            {erroCriterios && (
+              <div role="alert">
+                <p className="alert alert--error">Não foi possível comparar os critérios: {erroCriterios}. As notas gerais continuam disponíveis.</p>
+                <button type="button" className="button button--outline" onClick={() => setTentativa((valor) => valor + 1)}>Tentar novamente</button>
+              </div>
+            )}
+            {!erroCriterios && criteriosComparados.length === 0 && (
+              <p className="note">As entrevistas selecionadas não possuem critérios em comum para comparação.</p>
+            )}
+            {!erroCriterios && criteriosComparados.length > 0 && (
               <div className="table-wrap">
                 <table>
                   <thead>

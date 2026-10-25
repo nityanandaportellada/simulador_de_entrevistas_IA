@@ -1,3 +1,7 @@
+
+export type PerfilProfissional = 'estagio_trainee' | 'junior' | 'pleno' | 'senior'
+export type DificuldadePergunta = 'basica' | 'intermediaria' | 'avancada'
+
 export type StatusEntrevista =
   | 'em_andamento'
   | 'finalizada'
@@ -15,6 +19,7 @@ export interface Entrevista {
   status: StatusEntrevista
   pontuacao_final: number | null
   observacoes: string | null
+  perfil_profissional: PerfilProfissional | null
   tipo_entrevista_nome_aplicado: string | null
   tipo_entrevista_descricao_aplicada: string | null
   area_tecnica_id: number | null
@@ -25,6 +30,7 @@ export interface Entrevista {
 
 export interface CriarEntrevistaRequest {
   tipo_entrevista_id: number
+  perfil_profissional: PerfilProfissional
   area_tecnica_id?: number | null
   subarea_tecnica_id?: number | null
 }
@@ -35,8 +41,10 @@ export interface EntrevistaPergunta {
   pergunta_id: number
   pergunta_texto_aplicado: string
   exemplo_esperado_aplicado: string | null
-  competencia_id_aplicada: number
-  competencia_nome_aplicada: string
+  codigo_pergunta_aplicado: string | null
+  dificuldade_aplicada: DificuldadePergunta | null
+  competencia_id_aplicada: number | null
+  competencia_nome_aplicada: string | null
   area_tecnica_id_aplicada: number | null
   area_tecnica_nome_aplicada: string | null
   subarea_tecnica_id_aplicada: number | null

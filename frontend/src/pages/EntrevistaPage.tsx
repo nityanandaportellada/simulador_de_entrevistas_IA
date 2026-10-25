@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Loading } from '../components/Loading'
+import { ApiError } from '../services/api'
 import { studentService } from '../services/studentService'
 import type { Entrevista, EntrevistaPergunta, Resposta } from '../types/entrevista'
 
@@ -32,11 +33,21 @@ export function EntrevistaPage() {
   const [processando, setProcessando] = useState(false)
   const [erroCarregamento, setErroCarregamento] = useState('')
   const [erroOperacao, setErroOperacao] = useState('')
+  const [avisoOperacao, setAvisoOperacao] = useState('')
   const inicioResposta = useRef(Date.now())
 
   // Recupera a entrevista e as respostas já registradas, sem modificar dados existentes.
   useEffect(() => {
     let ativo = true
+    setLoading(true)
+    setErroCarregamento('')
+    setErroOperacao('')
+    setAvisoOperacao('')
+    setEntrevista(null)
+    setPerguntas([])
+    setRespostas([])
+    setRascunhos({})
+    setIndice(0)
     if (!Number.isInteger(entrevistaId) || entrevistaId <= 0) {
       setErroCarregamento('Identificador de entrevista inválido.')
       setLoading(false)
@@ -49,14 +60,22 @@ export function EntrevistaPage() {
     ])
       .then(([dados, listaPerguntas, listaRespostas]) => {
         if (!ativo) return
+        // A ordem do snapshot é a mesma utilizada pelo backend ao exigir respostas sequenciais.
+        const ordenadas = [...listaPerguntas].sort((a, b) =>
+          (a.ordem_pergunta_aplicada ?? a.id) - (b.ordem_pergunta_aplicada ?? b.id)
+        )
+        if (dados.perfil_profissional && (ordenadas.length !== 8 ||
+          new Set(ordenadas.map((pergunta) => pergunta.pergunta_id)).size !== 8)) {
+          throw new Error('O conjunto de oito perguntas da entrevista está inconsistente.')
+        }
         setEntrevista(dados)
-        setPerguntas(listaPerguntas)
+        setPerguntas(ordenadas)
         setRespostas(listaRespostas)
         // Ao retornar à entrevista, abre a primeira pergunta ainda sem resposta.
-        const pendente = listaPerguntas.findIndex((pergunta) =>
+        const pendente = ordenadas.findIndex((pergunta) =>
           !listaRespostas.some((resposta) => resposta.pergunta_id === pergunta.pergunta_id)
         )
-        setIndice(pendente >= 0 ? pendente : Math.max(0, listaPerguntas.length - 1))
+        setIndice(pendente >= 0 ? pendente : Math.max(0, ordenadas.length - 1))
       })
       .catch((erro: unknown) => {
         if (ativo) setErroCarregamento(mensagemErro(erro))
@@ -75,12 +94,12 @@ export function EntrevistaPage() {
   const respondidas = new Set(respostas.map((resposta) => resposta.pergunta_id))
   const quantidadeRespondida = perguntas.filter((pergunta) => respondidas.has(pergunta.pergunta_id)).length
   const primeiraPendente = perguntas.findIndex((pergunta) => !respondidas.has(pergunta.pergunta_id))
-  const limiteNavegacao = primeiraPendente >= 0 ? primeiraPendente : perguntas.length - 1
+  const emAndamento = entrevista?.status === 'em_andamento'
+  const limiteNavegacao = emAndamento && primeiraPendente >= 0 ? primeiraPendente : perguntas.length - 1
   const todasRespondidas = perguntas.length > 0 && quantidadeRespondida === perguntas.length
   const atual = perguntas[indice]
   const respostaAtual = respostas.find((resposta) => resposta.pergunta_id === atual?.pergunta_id)
   const texto = atual ? (rascunhos[atual.pergunta_id] ?? respostaAtual?.texto_resposta ?? '') : ''
-  const emAndamento = entrevista?.status === 'em_andamento'
   const ocupado = salvando || processando
   const percentual = perguntas.length ? Math.round((quantidadeRespondida / perguntas.length) * 100) : 0
 
@@ -89,6 +108,7 @@ export function EntrevistaPage() {
     if (ocupado || novoIndice < 0 || novoIndice > limiteNavegacao) return
     setIndice(novoIndice)
     setErroOperacao('')
+    setAvisoOperacao('')
   }
 
   // Registra cada resposta uma única vez. Respostas já salvas ficam somente para leitura.
@@ -96,7 +116,13 @@ export function EntrevistaPage() {
     if (!atual || !emAndamento || respostaAtual || ocupado || !texto.trim()) return
     setSalvando(true)
     setErroOperacao('')
+    setAvisoOperacao('')
     const conteudo = texto.trim()
+    if (conteudo.length > 10000) {
+      setErroOperacao('A resposta deve ter no máximo 10.000 caracteres.')
+      setSalvando(false)
+      return
+    }
     const tempo = Math.max(0, Math.round((Date.now() - inicioResposta.current) / 1000))
 
     try {
@@ -129,12 +155,27 @@ export function EntrevistaPage() {
       })
       if (indice < perguntas.length - 1) setIndice(indice + 1)
     } catch (erro: unknown) {
-      setErroOperacao(`Não foi possível confirmar a resposta: ${mensagemErro(erro)}. Verifique antes de tentar novamente.`)
-      // Se houve falha de comunicação, consulta o servidor para não duplicar uma resposta já gravada.
+      // Uma falha de rede pode ocorrer depois que o servidor gravou a resposta.
       try {
         const confirmadas = await studentService.listarRespostas(entrevistaId)
         setRespostas(confirmadas)
-      } catch { /* Mantém a resposta digitada para recuperação posterior. */ }
+        if (confirmadas.some((resposta) => resposta.pergunta_id === atual.pergunta_id)) {
+          setRascunhos((anteriores) => {
+            const novos = { ...anteriores }
+            delete novos[atual.pergunta_id]
+            return novos
+          })
+          const proxima = perguntas.findIndex((pergunta) =>
+            !confirmadas.some((resposta) => resposta.pergunta_id === pergunta.pergunta_id)
+          )
+          if (proxima >= 0) setIndice(proxima)
+          setAvisoOperacao('A resposta foi confirmada no servidor. Não é necessário enviá-la novamente.')
+        } else {
+          setErroOperacao(`A resposta não foi confirmada: ${mensagemErro(erro)}. O texto permanece na tela.`)
+        }
+      } catch {
+        setErroOperacao(`Não foi possível confirmar a resposta: ${mensagemErro(erro)}. Confira o histórico antes de tentar novamente.`)
+      }
     } finally {
       setSalvando(false)
     }
@@ -147,6 +188,7 @@ export function EntrevistaPage() {
     if (!podeAnalisar && !(emAndamento && todasRespondidas)) return
     setProcessando(true)
     setErroOperacao('')
+    setAvisoOperacao('')
     try {
       if (entrevista.status === 'em_andamento') {
         await studentService.finalizar(entrevistaId)
@@ -155,7 +197,15 @@ export function EntrevistaPage() {
       await studentService.analisar(entrevistaId)
       navigate(`/relatorios/${entrevistaId}`)
     } catch (erro: unknown) {
-      setErroOperacao(`Não foi possível concluir a finalização ou a análise: ${mensagemErro(erro)}`)
+      if (erro instanceof ApiError && erro.status === 429) {
+        const espera = erro.retryAfterSeconds
+        const prazo = espera === null ? '' : ` Aguarde aproximadamente ${Math.ceil(espera / 60)} minuto(s) para tentar novamente.`
+        setErroOperacao(`A entrevista está preservada, mas a avaliação não pôde começar: ${erro.message}.${prazo}`)
+      } else if (erro instanceof ApiError && erro.status === 409) {
+        setErroOperacao('A situação da entrevista mudou. Confira o status antes de solicitar outra análise.')
+      } else {
+        setErroOperacao(`Não foi possível concluir a finalização ou a análise: ${mensagemErro(erro)}`)
+      }
       // A finalização pode ter sido concluída antes de uma falha na análise.
       // Atualiza o estado para permitir tentar a análise novamente, sem finalizar duas vezes.
       try {
@@ -170,6 +220,7 @@ export function EntrevistaPage() {
     if (ocupado) return
     setProcessando(true)
     setErroOperacao('')
+    setAvisoOperacao('')
     try {
       setEntrevista(await studentService.buscarEntrevista(entrevistaId))
     } catch (erro: unknown) {
@@ -194,11 +245,23 @@ export function EntrevistaPage() {
   }
 
   if (!atual) {
-    return <div className="empty-state">Nenhuma pergunta disponível para esta entrevista.</div>
+    return (
+      <section className="panel">
+        <h1>Entrevista sem perguntas disponíveis</h1>
+        <p>Não foi possível apresentar o conjunto de perguntas desta entrevista.</p>
+        {entrevista.status === 'avaliada' && (
+          <button type="button" className="button button--primary" onClick={() => navigate(`/relatorios/${entrevistaId}`)}>
+            Ver relatório
+          </button>
+        )}
+        <button type="button" className="button button--outline" onClick={() => navigate('/historico')}>Voltar ao histórico</button>
+      </section>
+    )
   }
 
   const nomeTipo = entrevista.tipo_entrevista_nome_aplicado || `Tipo ${entrevista.tipo_entrevista_id}`
-  const podeSalvar = emAndamento && !respostaAtual && !ocupado && Boolean(texto.trim())
+  const podeSalvar = emAndamento && !respostaAtual && !ocupado && primeiraPendente === indice &&
+    Boolean(texto.trim()) && texto.trim().length <= 10000
   const podeFinalizar = emAndamento && todasRespondidas
   const podeReanalisar = entrevista.status === 'finalizada' || entrevista.status === 'erro_analise'
 
@@ -285,11 +348,13 @@ export function EntrevistaPage() {
                 if (erroOperacao) setErroOperacao('')
               }}
               placeholder="Descreva sua experiência, suas ações e os resultados..."
+              maxLength={10000}
               disabled={!emAndamento || Boolean(respostaAtual) || ocupado}
             />
           </label>
 
           {respostaAtual && <p className="note">Resposta registrada. Ela está disponível para consulta, mas não pode ser modificada.</p>}
+          {avisoOperacao && <p className="note" role="status">{avisoOperacao}</p>}
           {erroOperacao && <p className="alert alert--error" role="alert">{erroOperacao}</p>}
 
           <div className="button-row button-row--end">

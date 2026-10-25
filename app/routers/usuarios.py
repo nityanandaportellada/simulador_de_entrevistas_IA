@@ -1,18 +1,39 @@
 
 """Rotas autorizadas para dados pessoais e administração de usuários."""
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+import logging
+from typing import Literal
 
-from ..auth import alterar_senha
+from fastapi import APIRouter, Depends, HTTPException, Path, status
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from ..auth import alterar_senha, gerar_hash_senha, verificar_senha
 from ..models import Usuario
 from ..schemas import AlterarPerfilRequest, AlterarSenhaRequest, UsuarioAtualizar, UsuarioResposta
 from ..security import obter_administrador_atual, obter_usuario_atual
 from ..usuarios import (
-    alterar_perfil, ativar_usuario, atualizar_usuario, buscar_usuario,
-    inativar_usuario, listar_usuarios
+    alterar_perfil, ativar_usuario, atualizar_senha_hash, atualizar_usuario, buscar_usuario,
+    cadastrar_usuario, inativar_usuario, listar_usuarios
 )
 
 router = APIRouter(prefix="/usuarios", tags=["Usuários"])
+logger = logging.getLogger(__name__)
+
+
+class UsuarioAdminCriar(BaseModel):
+    """Cadastro administrativo, incluindo escolha de perfil."""
+    model_config = ConfigDict(extra="forbid")
+    nome: str = Field(min_length=2, max_length=150)
+    email: EmailStr
+    senha: str = Field(min_length=8, max_length=128)
+    perfil: Literal["estudante", "administrador"] = "estudante"
+
+
+class RedefinirSenhaAdmin(BaseModel):
+    """Recebe a nova senha; para a própria conta exige também a atual."""
+    model_config = ConfigDict(extra="forbid")
+    nova_senha: str = Field(min_length=8, max_length=128)
+    senha_atual: str | None = Field(default=None, max_length=128)
 
 
 @router.get("/me", response_model=UsuarioResposta)
@@ -53,6 +74,65 @@ def alterar_minha_senha(dados: AlterarSenhaRequest, usuario: Usuario = Depends(o
 def usuarios(administrador: Usuario = Depends(obter_administrador_atual)):
     """Lista usuários somente para administradores, sem devolver hashes de senha."""
     return listar_usuarios()
+
+
+@router.post("", response_model=UsuarioResposta, status_code=status.HTTP_201_CREATED)
+def criar_usuario_admin(dados: UsuarioAdminCriar, administrador: Usuario = Depends(obter_administrador_atual)):
+    """Cadastra estudante ou administrador, exclusivamente por usuário administrador."""
+    try:
+        usuario_id = cadastrar_usuario(dados.nome, str(dados.email), gerar_hash_senha(dados.senha), dados.perfil)
+        usuario = buscar_usuario(usuario_id)
+        if usuario is None:
+            raise HTTPException(status_code=500, detail="Usuário criado, mas não foi possível consultá-lo.")
+        logger.info("Usuário %s cadastrado pelo administrador %s", usuario_id, administrador.id)
+        return usuario
+    except ValueError as erro:
+        raise HTTPException(status_code=400, detail=str(erro)) from erro
+
+
+@router.put("/{usuario_id}", response_model=UsuarioResposta)
+def editar_usuario_admin(
+    dados: UsuarioAtualizar, usuario_id: int = Path(gt=0),
+    administrador: Usuario = Depends(obter_administrador_atual)
+):
+    """Permite editar nome e e-mail; perfil e situação têm rotas próprias."""
+    try:
+        if buscar_usuario(usuario_id) is None:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+        atualizar_usuario(usuario_id, dados.nome, str(dados.email))
+        usuario = buscar_usuario(usuario_id)
+        logger.info("Cadastro %s editado pelo administrador %s", usuario_id, administrador.id)
+        return usuario
+    except ValueError as erro:
+        raise HTTPException(status_code=400, detail=str(erro)) from erro
+
+
+@router.put("/{usuario_id}/senha", status_code=status.HTTP_204_NO_CONTENT)
+def redefinir_senha_admin(
+    dados: RedefinirSenhaAdmin, usuario_id: int = Path(gt=0),
+    administrador: Usuario = Depends(obter_administrador_atual)
+):
+    """Redefine senha, revogando JWTs antigos; para a conta própria exige a senha atual."""
+    usuario = buscar_usuario(usuario_id)
+    if usuario is None:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    if not usuario.ativo:
+        raise HTTPException(status_code=400, detail="Ative o usuário antes de redefinir a senha.")
+    try:
+        if usuario_id == administrador.id:
+            if not dados.senha_atual:
+                raise HTTPException(status_code=400, detail="Informe sua senha atual.")
+            alterada = alterar_senha(usuario_id, dados.senha_atual, dados.nova_senha)
+        else:
+            if verificar_senha(dados.nova_senha, usuario.senha_hash):
+                raise ValueError("A nova senha deve ser diferente da senha anterior.")
+            alterada = atualizar_senha_hash(usuario_id, gerar_hash_senha(dados.nova_senha))
+        if not alterada:
+            raise HTTPException(status_code=409, detail="Não foi possível atualizar a senha.")
+        logger.info("Senha do usuário %s redefinida pelo administrador %s", usuario_id, administrador.id)
+        return None
+    except ValueError as erro:
+        raise HTTPException(status_code=400, detail=str(erro)) from erro
 
 
 @router.get("/{usuario_id}", response_model=UsuarioResposta)

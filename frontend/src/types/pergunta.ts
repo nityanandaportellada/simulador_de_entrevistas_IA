@@ -1,9 +1,14 @@
+
+export type DificuldadePergunta = 'basica' | 'intermediaria' | 'avancada'
+
 export interface Pergunta {
   id: number
   tipo_entrevista_id: number
-  competencia_id: number
+  competencia_id: number | null
   texto: string
   exemplo_esperado: string | null
+  codigo: string | null
+  dificuldade: DificuldadePergunta | null
   ordem: number | null
   ativa: boolean
   peso: number
@@ -15,9 +20,11 @@ export interface Pergunta {
 
 export interface PerguntaRequest {
   tipo_entrevista_id: number
-  competencia_id: number
+  competencia_id: number | null
   texto: string
   exemplo_esperado?: string | null
+  codigo?: string | null
+  dificuldade?: DificuldadePergunta | null
   ordem?: number | null
   peso: number
   usa_star: boolean

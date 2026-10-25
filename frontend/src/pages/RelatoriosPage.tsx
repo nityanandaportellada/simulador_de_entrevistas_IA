@@ -6,7 +6,7 @@ import { studentService } from '../services/studentService'
 import type { ItemHistorico } from '../types/historico'
 
 function dataFormatada(valor: string): string {
-  const data = new Date(valor.includes('T') ? valor : `${valor.replace(' ', 'T')}Z`)
+  const data = new Date(valor.includes('T') ? valor : valor.replace(' ', 'T'))
   return Number.isNaN(data.getTime()) ? valor : data.toLocaleDateString('pt-BR')
 }
 
@@ -23,10 +23,13 @@ export function RelatoriosPage() {
     let ativo = true
     setLoading(true)
     setErro('')
+    setEntrevistas([])
 
     studentService.historico()
       .then((dados) => {
-        if (ativo) setEntrevistas(dados.filter((item) => item.status === 'avaliada'))
+        if (ativo) setEntrevistas(dados.filter((item) => item.status === 'avaliada' &&
+          item.pontuacao_final !== null && Number.isFinite(item.pontuacao_final) &&
+          item.pontuacao_final >= 0 && item.pontuacao_final <= 10))
       })
       .catch((falha: unknown) => {
         if (ativo) setErro(falha instanceof Error ? falha.message : 'Erro ao carregar relatórios.')
@@ -133,7 +136,14 @@ export function RelatoriosPage() {
         </p>
 
         {filtradas.length === 0 ? (
-          <div className="empty-state">Nenhum relatório encontrado para os filtros selecionados.</div>
+          <div className="empty-state">
+            {entrevistas.length === 0 ? (
+              <>
+                <p>Você ainda não tem entrevistas avaliadas.</p>
+                <Link className="button button--primary" to="/entrevistas/nova">Iniciar uma entrevista</Link>
+              </>
+            ) : 'Nenhum relatório encontrado para os filtros selecionados.'}
+          </div>
         ) : (
           <div className="table-wrap">
             <table>

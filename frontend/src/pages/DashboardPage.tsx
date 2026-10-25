@@ -13,7 +13,8 @@ const NOMES_STATUS: Record<ItemHistorico['status'], string> = {
 }
 
 function formatarData(valor: string): string {
-  const data = new Date(valor.includes('T') ? valor : `${valor.replace(' ', 'T')}Z`)
+  // Datas do SQLite sem fuso são horários locais, não UTC.
+  const data = new Date(valor.includes('T') ? valor : valor.replace(' ', 'T'))
   return Number.isNaN(data.getTime()) ? valor : data.toLocaleDateString('pt-BR')
 }
 
@@ -24,6 +25,7 @@ export function DashboardPage() {
   const [evolucaoCriterios, setEvolucaoCriterios] = useState<EvolucaoCriterios[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
+  const [erroCriterios, setErroCriterios] = useState('')
   const [tentativa, setTentativa] = useState(0)
   const [tipoFiltro, setTipoFiltro] = useState('todos')
 
@@ -31,19 +33,27 @@ export function DashboardPage() {
     let ativo = true
     setLoading(true)
     setErro('')
+    setErroCriterios('')
+    setResumo(null)
+    setHistorico([])
+    setEvolucao([])
+    setEvolucaoCriterios([])
 
-    Promise.all([
-      studentService.resumo(),
-      studentService.historico(),
-      studentService.evolucao(),
-      studentService.evolucaoCriterios()
+    // Uma falha nos critérios não deve ocultar o resumo e as notas já publicados.
+    Promise.allSettled([
+      studentService.resumo(), studentService.historico(),
+      studentService.evolucao(), studentService.evolucaoCriterios()
     ])
-      .then(([dadosResumo, dadosHistorico, dadosEvolucao, dadosCriterios]) => {
+      .then(([resultadoResumo, resultadoHistorico, resultadoEvolucao, resultadoCriterios]) => {
         if (!ativo) return
-        setResumo(dadosResumo)
-        setHistorico(dadosHistorico)
-        setEvolucao(dadosEvolucao)
-        setEvolucaoCriterios(dadosCriterios)
+        if (resultadoResumo.status === 'rejected') throw resultadoResumo.reason
+        if (resultadoHistorico.status === 'rejected') throw resultadoHistorico.reason
+        if (resultadoEvolucao.status === 'rejected') throw resultadoEvolucao.reason
+        setResumo(resultadoResumo.value)
+        setHistorico(resultadoHistorico.value)
+        setEvolucao(resultadoEvolucao.value.filter((item) => Number.isFinite(item.pontuacao) && item.pontuacao >= 0 && item.pontuacao <= 10))
+        if (resultadoCriterios.status === 'fulfilled') setEvolucaoCriterios(resultadoCriterios.value)
+        else setErroCriterios(resultadoCriterios.reason instanceof Error ? resultadoCriterios.reason.message : 'Não foi possível consultar os critérios.')
       })
       .catch((falha: unknown) => {
         if (ativo) setErro(falha instanceof Error ? falha.message : 'Erro ao carregar os indicadores.')
@@ -195,7 +205,12 @@ export function DashboardPage() {
           <p>Critérios e médias da última entrevista avaliada dentro do filtro de modalidade.</p>
         </div>
 
-        {criteriosRecentes.length === 0 ? (
+        {erroCriterios ? (
+          <div role="alert">
+            <p className="alert alert--error">Não foi possível consultar a evolução dos critérios: {erroCriterios}</p>
+            <button type="button" className="button button--outline" onClick={() => setTentativa((valor) => valor + 1)}>Tentar novamente</button>
+          </div>
+        ) : criteriosRecentes.length === 0 ? (
           <div className="empty-state">Ainda não há critérios avaliados para esta modalidade.</div>
         ) : (
           <div className="progress-list">

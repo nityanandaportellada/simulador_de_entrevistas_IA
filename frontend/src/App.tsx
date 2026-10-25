@@ -1,5 +1,6 @@
+
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { ProtectedRoute, AdminRoute } from './components/ProtectedRoute'
+import { ProtectedRoute, AdminRoute, StudentRoute } from './components/ProtectedRoute'
 import { AppLayout } from './layouts/AppLayout'
 import { LoginPage } from './pages/LoginPage'
 import { CadastroPage } from './pages/CadastroPage'
@@ -23,13 +24,15 @@ export default function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/entrevistas/nova" element={<NovaEntrevistaPage />} />
-          <Route path="/entrevistas/:id" element={<EntrevistaPage />} />
-          <Route path="/historico" element={<HistoricoPage />} />
-          <Route path="/relatorios" element={<RelatoriosPage />} />
-          <Route path="/relatorios/:id" element={<RelatorioPage />} />
-          <Route path="/perfil" element={<PerfilPage />} />
+          <Route element={<StudentRoute />}>
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/entrevistas/nova" element={<NovaEntrevistaPage />} />
+            <Route path="/entrevistas/:id" element={<EntrevistaPage />} />
+            <Route path="/historico" element={<HistoricoPage />} />
+            <Route path="/relatorios" element={<RelatoriosPage />} />
+            <Route path="/relatorios/:id" element={<RelatorioPage />} />
+            <Route path="/perfil" element={<PerfilPage />} />
+          </Route>
 
           <Route element={<AdminRoute />}>
             <Route path="/admin" element={<AdminDashboardPage />} />

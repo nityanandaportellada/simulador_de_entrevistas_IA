@@ -79,7 +79,7 @@ export function AppLayout() {
                     <Users size={20} aria-hidden="true" /><span>Usuários</span>
                   </NavLink>
                   <NavLink to="/admin/tipos" onClick={fecharMenu}>
-                    <ClipboardList size={20} aria-hidden="true" /><span>Tipos de entrevista</span>
+                    <ClipboardList size={20} aria-hidden="true" /><span>Entrevistas</span>
                   </NavLink>
                   <NavLink to="/admin/competencias" onClick={fecharMenu}>
                     <Target size={20} aria-hidden="true" /><span>Competências</span>

@@ -19,14 +19,18 @@ function percentual(valor: number): number {
 
 function dataBrasileira(valor: string | null): string {
   if (!valor) return '-'
-  const iso = valor.includes('T') ? valor : `${valor.replace(' ', 'T')}Z`
+  // O banco grava horários locais sem fuso; não os converta automaticamente para UTC.
+  const iso = valor.includes('T') ? valor : valor.replace(' ', 'T')
   const data = new Date(iso)
   return Number.isNaN(data.getTime()) ? valor : data.toLocaleString('pt-BR')
 }
 
 function mensagemErro(erro: unknown): string {
   if (erro instanceof ApiError && erro.status === 409) {
-    return 'A avaliação ainda não foi concluída. O relatório será liberado quando a entrevista estiver avaliada.'
+    // O backend usa 409 tanto para avaliação pendente como para histórico inconsistente.
+    return typeof erro.detail === 'string' && erro.detail.trim()
+      ? erro.detail
+      : 'O relatório ainda não está disponível ou possui inconsistências. Confira a situação da entrevista.'
   }
   return erro instanceof Error ? erro.message : 'Não foi possível carregar o relatório.'
 }
@@ -39,7 +43,7 @@ export function RelatorioPage() {
   const [erro, setErro] = useState('')
   const [tentativas, setTentativas] = useState(0)
 
-  // A API so libera o relatorio depois da avaliacao e da verificacao de acesso.
+  // A API só libera o relatório depois da avaliação e da verificação de acesso.
   useEffect(() => {
     let ativo = true
     setLoading(true)
@@ -59,12 +63,19 @@ export function RelatorioPage() {
 
   if (loading) return <Loading />
 
-  if (erro || !relatorio || relatorio.entrevista.status !== 'avaliada') {
+  // Evita apresentar um relatório parcial mesmo se uma resposta inválida chegar ao cliente.
+  const relatorioCompleto = relatorio !== null && relatorio.entrevista.status === 'avaliada' &&
+    relatorio.entrevista.pontuacao_final !== null && Number.isFinite(relatorio.entrevista.pontuacao_final) &&
+    relatorio.quantidade_respostas > 0 && relatorio.quantidade_avaliacoes === relatorio.quantidade_respostas &&
+    relatorio.respostas.length === relatorio.quantidade_respostas &&
+    relatorio.respostas.every((resposta) => resposta.avaliacao !== null)
+
+  if (erro || !relatorioCompleto || !relatorio) {
     return (
       <section className="panel">
         <h1>Relatório indisponível</h1>
         <p className="alert alert--error" role="alert">
-          {erro || 'Este relatório só pode ser consultado após a avaliação da entrevista.'}
+          {erro || 'O relatório ainda não está completo ou apresenta inconsistências. Confira a situação da entrevista.'}
         </p>
         <div className="button-row">
           <button type="button" className="button button--primary" onClick={() => setTentativas((valor) => valor + 1)}>

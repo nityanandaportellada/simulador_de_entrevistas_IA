@@ -1,9 +1,11 @@
+
 import { apiGet, apiPost, apiPut } from './api'
 import type {
   AlterarPerfilRequest,
   AlterarPerfilResponse,
   MensagemResponse,
-  Usuario
+  Usuario,
+  PerfilUsuario
 } from '../types/usuario'
 import type {
   AreaTecnica,
@@ -21,8 +23,31 @@ import type {
   PerguntaRequest
 } from '../types/pergunta'
 
+export interface NovoUsuarioAdmin {
+  nome: string
+  email: string
+  senha: string
+  perfil: PerfilUsuario
+}
+
+export interface EditarUsuarioAdmin {
+  nome: string
+  email: string
+}
+
+export interface RedefinirSenhaUsuarioAdmin {
+  nova_senha: string
+  senha_atual?: string
+}
+
 export const adminService = {
   usuarios: () => apiGet<Usuario[]>('/usuarios'),
+  criarUsuario: (dados: NovoUsuarioAdmin) =>
+    apiPost<Usuario, NovoUsuarioAdmin>('/usuarios', dados),
+  editarUsuario: (id: number, dados: EditarUsuarioAdmin) =>
+    apiPut<Usuario, EditarUsuarioAdmin>(`/usuarios/${id}`, dados),
+  redefinirSenhaUsuario: (id: number, dados: RedefinirSenhaUsuarioAdmin) =>
+    apiPut<void, RedefinirSenhaUsuarioAdmin>(`/usuarios/${id}/senha`, dados),
   alterarPerfil: (id: number, body: AlterarPerfilRequest) =>
     apiPut<AlterarPerfilResponse, AlterarPerfilRequest>(
       `/usuarios/${id}/perfil`,
@@ -106,8 +131,12 @@ export const adminService = {
     ),
 
   inativarPergunta: (id: number) =>
-    apiPut<Pergunta>(`/perguntas/${id}/inativar`),
+    apiPut<Pergunta>(
+      `/perguntas/${id}/inativar`
+    ),
 
   ativarPergunta: (id: number) =>
-    apiPut<AtivarPerguntaResponse>(`/perguntas/${id}/ativar`)
+    apiPut<AtivarPerguntaResponse>(
+      `/perguntas/${id}/ativar`
+    )
 }

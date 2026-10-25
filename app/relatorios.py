@@ -2,6 +2,7 @@
 """Funções responsáveis por montar os relatórios históricos das entrevistas."""
 
 import json
+import math
 
 from .avaliacao import (
     buscar_avaliacoes_entrevista,
@@ -47,7 +48,7 @@ def _converter_lista_json(valor) -> list:
 
 def buscar_dados_entrevista(entrevista_id: int):
     """Busca uma entrevista e valida o ID antes de devolver os dados."""
-    if not isinstance(entrevista_id, int) or entrevista_id <= 0:
+    if type(entrevista_id) is not int or entrevista_id <= 0:
         raise ValueError("ID da entrevista inválido.")
     entrevista = buscar_entrevista(entrevista_id)
     if entrevista is None:
@@ -69,12 +70,75 @@ def _contar_perguntas_historicas(perguntas_congeladas, respostas) -> int:
     return len(perguntas_ids)
 
 
+def _validar_nota_final(valor) -> float:
+    """Garante uma nota publicada, numérica e dentro da escala de 0 a 10."""
+    if type(valor) not in (int, float) or not math.isfinite(valor) or not 0 <= valor <= 10:
+        raise ValueError("A entrevista avaliada possui pontuação final inválida.")
+    return float(valor)
+
+
+def _validar_integridade(entrevista, perguntas, respostas, avaliacoes, notas) -> None:
+    """Confere se todas as respostas receberam avaliações e critérios históricos."""
+    if not respostas or len(avaliacoes) != len(respostas):
+        raise ValueError("A entrevista avaliada não possui todas as respostas avaliadas.")
+
+    ids_respostas = {resposta.id for resposta in respostas}
+    ids_avaliados = {avaliacao["resposta_id"] for avaliacao in avaliacoes}
+    if len(ids_respostas) != len(respostas) or ids_respostas != ids_avaliados:
+        raise ValueError("As avaliações não correspondem às respostas da entrevista.")
+
+    # Entrevistas antigas não têm perfil nem conjunto congelado de oito perguntas.
+    if entrevista.perfil_profissional is not None:
+        if len(perguntas) != 8 or len(respostas) != 8:
+            raise ValueError("A entrevista atual não possui as oito perguntas avaliadas.")
+        ids_perguntas = {pergunta.pergunta_id for pergunta in perguntas}
+        if len(ids_perguntas) != 8 or {r.pergunta_id for r in respostas} != ids_perguntas:
+            raise ValueError("As respostas não correspondem às perguntas congeladas.")
+
+    ids_avaliacoes = {avaliacao["avaliacao_id"] for avaliacao in avaliacoes}
+    ids_com_notas = {nota["avaliacao_id"] for nota in notas}
+    if len(ids_avaliacoes) != len(avaliacoes) or ids_com_notas != ids_avaliacoes:
+        raise ValueError("Existem avaliações sem notas históricas dos critérios.")
+
+    criterios_por_avaliacao = {}
+    for nota in notas:
+        criterios = criterios_por_avaliacao.setdefault(nota["avaliacao_id"], set())
+        if nota["criterio_id"] in criterios:
+            raise ValueError("Existem notas duplicadas para um mesmo critério.")
+        criterios.add(nota["criterio_id"])
+
+    if len({frozenset(criterios) for criterios in criterios_por_avaliacao.values()}) != 1:
+        raise ValueError("As respostas não possuem o mesmo conjunto de critérios históricos.")
+
+    # Confere a pontuação geral sem consultar ou recalcular o catálogo atual.
+    for avaliacao in avaliacoes:
+        nota = avaliacao["pontuacao"]
+        if type(nota) not in (int, float) or not math.isfinite(nota) or not 0 <= nota <= 10:
+            raise ValueError("Uma resposta possui pontuação histórica inválida.")
+
+    soma_pesos = sum(avaliacao["peso_pergunta"] for avaliacao in avaliacoes)
+    if not math.isfinite(soma_pesos) or soma_pesos <= 0:
+        raise ValueError("Os pesos históricos das perguntas são inválidos.")
+
+    nota_calculada = sum(
+        avaliacao["pontuacao"] * avaliacao["peso_pergunta"] for avaliacao in avaliacoes
+    ) / soma_pesos
+    nota_publicada = _validar_nota_final(entrevista.pontuacao_final)
+
+    if not math.isfinite(nota_calculada) or abs(nota_calculada - nota_publicada) > 0.02:
+        raise ValueError("A pontuação publicada não corresponde às avaliações históricas.")
+
+
 def gerar_relatorio(entrevista_id: int) -> dict:
     """Monta o relatório completo usando snapshots e compatibilidade com entrevistas antigas."""
-    if not isinstance(entrevista_id, int) or entrevista_id <= 0:
+    if type(entrevista_id) is not int or entrevista_id <= 0:
         raise ValueError("ID da entrevista inválido.")
 
     entrevista = buscar_dados_entrevista(entrevista_id)
+
+    # Impede gerar um relatório antes da conclusão da avaliação.
+    if entrevista.status != "avaliada":
+        raise ValueError("O relatório só fica disponível após a avaliação.")
 
     # As entrevistas atuais possuem o conjunto de perguntas congelado no início.
     perguntas_congeladas = listar_perguntas_entrevista(entrevista_id)
@@ -89,12 +153,12 @@ def gerar_relatorio(entrevista_id: int) -> dict:
     quantidade_perguntas = _contar_perguntas_historicas(perguntas_congeladas, respostas)
     avaliacoes = buscar_avaliacoes_entrevista(entrevista_id)
 
-    # Só existem notas de critérios quando existem avaliações.
     if avaliacoes:
         todas_notas_criterios = buscar_notas_criterios(entrevista_id)
     else:
         todas_notas_criterios = []
 
+    _validar_integridade(entrevista, perguntas_congeladas, respostas, avaliacoes, todas_notas_criterios)
     respostas_relatorio = []
 
     for resposta in respostas:
@@ -199,7 +263,6 @@ def gerar_relatorio(entrevista_id: int) -> dict:
             "avaliacao": avaliacao_formatada
         })
 
-    # Os valores consolidados só são calculados quando existem avaliações.
     pontuacao_final = _valor(entrevista, "pontuacao_final")
     classificacao = None
     desempenho_criterios = []
@@ -209,7 +272,7 @@ def gerar_relatorio(entrevista_id: int) -> dict:
     }
 
     if avaliacoes:
-        # Erros de integridade histórica não são escondidos pelo relatório.
+        # Os critérios também são calculados a partir de seus snapshots históricos.
         desempenho_criterios = calcular_desempenho_criterios(entrevista_id)
 
         if pontuacao_final is not None:

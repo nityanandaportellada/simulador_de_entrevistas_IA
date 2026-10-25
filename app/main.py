@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .routers import (
-    analise, areas_tecnicas, auth, competencias, criterios, entrevistas,
+    analise, areas_tecnicas, auth, competencias, criterios, entrevistas, painel_admin,
     historico, perguntas, relatorios, subareas_tecnicas, tipos_entrevista, usuarios
 )
 
@@ -92,6 +92,7 @@ async def erro_inesperado(request: Request, erro: Exception):
 
 app.include_router(auth.router)
 app.include_router(usuarios.router)
+app.include_router(painel_admin.router)
 app.include_router(tipos_entrevista.router)
 app.include_router(competencias.router)
 app.include_router(criterios.router)

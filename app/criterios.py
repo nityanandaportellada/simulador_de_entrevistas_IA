@@ -1,6 +1,7 @@
 """Gerenciamento dos critérios de avaliação e cadastro dos dados iniciais do sistema."""
 
 import sqlite3
+import math
 
 try:
     from .database import conectar_banco
@@ -134,6 +135,9 @@ def _normalizar_peso(peso: float) -> float:
     except (TypeError, ValueError):
         raise ValueError("O peso do critério deve ser numérico.")
 
+    if not math.isfinite(peso_normalizado):
+        raise ValueError("O peso deve ser um número finito.")
+
     if peso_normalizado <= 0:
         raise ValueError("O peso do critério deve ser maior que zero.")
 
@@ -219,6 +223,23 @@ def obter_proxima_ordem() -> int:
         conexao.close()
 
 
+def _validar_soma_pesos(cursor, novo_peso: float, ignorar_id: int | None = None) -> None:
+    """Impede que os pesos ativos ultrapassem o limite de 1,00."""
+    if ignorar_id is None:
+        cursor.execute("SELECT COALESCE(SUM(peso), 0) FROM criterios_avaliacao WHERE ativo = 1")
+    else:
+        cursor.execute(
+            "SELECT COALESCE(SUM(peso), 0) FROM criterios_avaliacao WHERE ativo = 1 AND id <> ?",
+            (ignorar_id,)
+        )
+    soma = float(cursor.fetchone()[0])
+    if soma + novo_peso > 1.0 + 0.000000001:
+        raise ValueError(
+            f"A soma dos pesos ativos não pode ultrapassar 1,00. "
+            f"Soma resultante: {soma + novo_peso:.4f}."
+        )
+
+
 def cadastrar_criterio(
     nome: str,
     descricao: str | None,
@@ -243,6 +264,8 @@ def cadastrar_criterio(
     cursor = conexao.cursor()
 
     try:
+        conexao.execute("BEGIN IMMEDIATE")
+        _validar_soma_pesos(cursor, peso_normalizado)
         cursor.execute(
             """
             INSERT INTO criterios_avaliacao (nome, descricao, peso, ordem, ativo)
@@ -254,6 +277,9 @@ def cadastrar_criterio(
         criterio_id = cursor.lastrowid
         conexao.commit()
         return criterio_id
+    except ValueError:
+        conexao.rollback()
+        raise
     except sqlite3.IntegrityError as erro:
         conexao.rollback()
         raise ValueError("Não foi possível cadastrar o critério.") from erro
@@ -355,6 +381,9 @@ def editar_criterio(
     cursor = conexao.cursor()
 
     try:
+        conexao.execute("BEGIN IMMEDIATE")
+        if criterio_atual["ativo"]:
+            _validar_soma_pesos(cursor, peso_normalizado, ignorar_id=criterio_id)
         cursor.execute(
             """
             UPDATE criterios_avaliacao
@@ -366,6 +395,9 @@ def editar_criterio(
 
         conexao.commit()
         return cursor.rowcount > 0
+    except ValueError:
+        conexao.rollback()
+        raise
     except sqlite3.IntegrityError as erro:
         conexao.rollback()
         raise ValueError("Não foi possível atualizar o critério.") from erro
@@ -436,6 +468,15 @@ def _alterar_status_criterio(criterio_id: int, ativo: bool) -> bool:
         if cursor.fetchone() is None:
             return False
 
+        conexao.execute("BEGIN IMMEDIATE")
+        if ativo:
+            cursor.execute(
+                "SELECT peso, ativo FROM criterios_avaliacao WHERE id = ?",
+                (criterio_id,)
+            )
+            registro = cursor.fetchone()
+            if not registro["ativo"]:
+                _validar_soma_pesos(cursor, float(registro["peso"]), ignorar_id=criterio_id)
         cursor.execute(
             "UPDATE criterios_avaliacao SET ativo = ? WHERE id = ?",
             (1 if ativo else 0, criterio_id)
@@ -443,7 +484,7 @@ def _alterar_status_criterio(criterio_id: int, ativo: bool) -> bool:
 
         conexao.commit()
         return True
-    except sqlite3.Error:
+    except (ValueError, sqlite3.Error):
         conexao.rollback()
         raise
     finally:

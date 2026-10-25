@@ -1,13 +1,7 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-  type ReactNode
-} from 'react'
+
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { buscarUsuarioAtual, login as loginService, logout as logoutService } from '../services/authService'
-import { getAccessToken } from '../services/api'
+import { EVENTO_SESSAO_EXPIRADA, getAccessToken } from '../services/api'
 import type { LoginRequest } from '../types/auth'
 import type { Usuario } from '../types/usuario'
 
@@ -27,18 +21,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [carregando, setCarregando] = useState(true)
 
   const refreshUsuario = useCallback(async () => {
-    if (!getAccessToken()) {
+    const token = getAccessToken()
+    if (!token) {
       setUsuario(null)
       setCarregando(false)
       return
     }
-
     try {
       const atual = await buscarUsuarioAtual()
-      setUsuario(atual)
+      // Não restaura a sessão se ela foi encerrada durante a requisição.
+      if (getAccessToken() === token) setUsuario(atual)
     } catch {
-      logoutService()
-      setUsuario(null)
+      if (getAccessToken() === token) {
+        logoutService()
+        setUsuario(null)
+      }
     } finally {
       setCarregando(false)
     }
@@ -48,11 +45,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refreshUsuario()
   }, [refreshUsuario])
 
-  async function login(dados: LoginRequest) {
+  useEffect(() => {
+    // A API avisa quando um JWT expirou ou foi revogado.
+    const encerrarSessao = () => {
+      setUsuario(null)
+      setCarregando(false)
+    }
+    window.addEventListener(EVENTO_SESSAO_EXPIRADA, encerrarSessao)
+    return () => window.removeEventListener(EVENTO_SESSAO_EXPIRADA, encerrarSessao)
+  }, [])
+
+  async function login(dados: LoginRequest): Promise<Usuario> {
     await loginService(dados)
-    const atual = await buscarUsuarioAtual()
-    setUsuario(atual)
-    return atual
+    try {
+      const atual = await buscarUsuarioAtual()
+      setUsuario(atual)
+      return atual
+    } catch (erro) {
+      logoutService()
+      setUsuario(null)
+      throw erro
+    }
   }
 
   function logout() {
@@ -74,10 +87,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext)
-
-  if (!context) {
-    throw new Error('useAuth precisa ser usado dentro de AuthProvider.')
-  }
-
+  if (!context) throw new Error('useAuth precisa ser usado dentro de AuthProvider.')
   return context
 }
