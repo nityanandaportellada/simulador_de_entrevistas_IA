@@ -7,13 +7,19 @@ import { MetricCard } from '../components/MetricCard'
 import { studentService } from '../services/studentService'
 import type { EvolucaoCriterios, EvolucaoPontuacao, ItemHistorico, ResumoHistorico } from '../types/historico'
 
+type Coluna = 'id' | 'modalidade' | 'data' | 'situacao' | 'nota' | 'acao'
+const COLUNAS: { campo: Coluna; titulo: string }[] = [
+  { campo: 'id', titulo: 'ID' }, { campo: 'modalidade', titulo: 'Modalidade' },
+  { campo: 'data', titulo: 'Data' }, { campo: 'situacao', titulo: 'Situação' },
+  { campo: 'nota', titulo: 'Nota' }, { campo: 'acao', titulo: 'Ação' }
+]
+const compararTexto = new Intl.Collator('pt-BR', { sensitivity: 'base', numeric: true })
 const NOMES_STATUS: Record<ItemHistorico['status'], string> = {
   em_andamento: 'Em andamento', finalizada: 'Finalizada', em_analise: 'Em análise',
   avaliada: 'Avaliada', erro_analise: 'Erro na análise', cancelada: 'Cancelada'
 }
 
 function formatarData(valor: string): string {
-  // Datas do SQLite sem fuso são horários locais, não UTC.
   const data = new Date(valor.includes('T') ? valor : valor.replace(' ', 'T'))
   return Number.isNaN(data.getTime()) ? valor : data.toLocaleDateString('pt-BR')
 }
@@ -25,35 +31,27 @@ export function DashboardPage() {
   const [evolucaoCriterios, setEvolucaoCriterios] = useState<EvolucaoCriterios[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
-  const [erroCriterios, setErroCriterios] = useState('')
   const [tentativa, setTentativa] = useState(0)
   const [tipoFiltro, setTipoFiltro] = useState('todos')
+  const [ordenacao, setOrdenacao] = useState<{ campo: Coluna; direcao: 'asc' | 'desc' }>({ campo: 'data', direcao: 'desc' })
 
   useEffect(() => {
     let ativo = true
     setLoading(true)
     setErro('')
-    setErroCriterios('')
-    setResumo(null)
-    setHistorico([])
-    setEvolucao([])
-    setEvolucaoCriterios([])
 
-    // Uma falha nos critérios não deve ocultar o resumo e as notas já publicados.
-    Promise.allSettled([
-      studentService.resumo(), studentService.historico(),
-      studentService.evolucao(), studentService.evolucaoCriterios()
+    Promise.all([
+      studentService.resumo(),
+      studentService.historico(),
+      studentService.evolucao(),
+      studentService.evolucaoCriterios()
     ])
-      .then(([resultadoResumo, resultadoHistorico, resultadoEvolucao, resultadoCriterios]) => {
+      .then(([dadosResumo, dadosHistorico, dadosEvolucao, dadosCriterios]) => {
         if (!ativo) return
-        if (resultadoResumo.status === 'rejected') throw resultadoResumo.reason
-        if (resultadoHistorico.status === 'rejected') throw resultadoHistorico.reason
-        if (resultadoEvolucao.status === 'rejected') throw resultadoEvolucao.reason
-        setResumo(resultadoResumo.value)
-        setHistorico(resultadoHistorico.value)
-        setEvolucao(resultadoEvolucao.value.filter((item) => Number.isFinite(item.pontuacao) && item.pontuacao >= 0 && item.pontuacao <= 10))
-        if (resultadoCriterios.status === 'fulfilled') setEvolucaoCriterios(resultadoCriterios.value)
-        else setErroCriterios(resultadoCriterios.reason instanceof Error ? resultadoCriterios.reason.message : 'Não foi possível consultar os critérios.')
+        setResumo(dadosResumo)
+        setHistorico(dadosHistorico)
+        setEvolucao(dadosEvolucao)
+        setEvolucaoCriterios(dadosCriterios)
       })
       .catch((falha: unknown) => {
         if (ativo) setErro(falha instanceof Error ? falha.message : 'Erro ao carregar os indicadores.')
@@ -93,7 +91,29 @@ export function DashboardPage() {
     ? evolucaoFiltrada.reduce((soma, item) => soma + item.pontuacao, 0) / evolucaoFiltrada.length
     : null
 
-  const ultimas = useMemo(() => historico.slice(0, 5), [historico])
+  // Exibe somente as cinco mais recentes; a ordenação não altera a evolução cronológica.
+  const ultimas = useMemo(() => {
+    function valor(item: ItemHistorico): string | number | null {
+      if (ordenacao.campo === 'id') return item.id
+      if (ordenacao.campo === 'modalidade') return `${item.tipo_entrevista ?? `Tipo ${item.tipo_entrevista_id}`} ${item.area_tecnica ?? ''} ${item.subarea_tecnica ?? ''}`
+      if (ordenacao.campo === 'data') return item.data_inicio
+      if (ordenacao.campo === 'situacao') return NOMES_STATUS[item.status]
+      if (ordenacao.campo === 'nota') return item.status === 'avaliada' && item.pontuacao_final !== null && Number.isFinite(item.pontuacao_final) ? item.pontuacao_final : null
+      return item.status === 'avaliada' ? 'Relatório' : item.status === 'cancelada' ? null : 'Ver entrevista'
+    }
+    return [...historico].sort((a, b) => b.data_inicio.localeCompare(a.data_inicio) || b.id - a.id).slice(0, 5).sort((a, b) => {
+      const x = valor(a), y = valor(b)
+      if (x === null && y === null) return b.id - a.id
+      if (x === null) return 1
+      if (y === null) return -1
+      const comparacao = typeof x === 'number' && typeof y === 'number' ? x - y : compararTexto.compare(String(x), String(y))
+      return comparacao ? comparacao * (ordenacao.direcao === 'asc' ? 1 : -1) : b.id - a.id
+    })
+  }, [historico, ordenacao])
+
+  function ordenar(campo: Coluna) {
+    setOrdenacao((atual) => ({ campo, direcao: atual.campo === campo && atual.direcao === 'asc' ? 'desc' : 'asc' }))
+  }
 
   if (loading) return <Loading />
 
@@ -205,12 +225,7 @@ export function DashboardPage() {
           <p>Critérios e médias da última entrevista avaliada dentro do filtro de modalidade.</p>
         </div>
 
-        {erroCriterios ? (
-          <div role="alert">
-            <p className="alert alert--error">Não foi possível consultar a evolução dos critérios: {erroCriterios}</p>
-            <button type="button" className="button button--outline" onClick={() => setTentativa((valor) => valor + 1)}>Tentar novamente</button>
-          </div>
-        ) : criteriosRecentes.length === 0 ? (
+        {criteriosRecentes.length === 0 ? (
           <div className="empty-state">Ainda não há critérios avaliados para esta modalidade.</div>
         ) : (
           <div className="progress-list">
@@ -238,7 +253,7 @@ export function DashboardPage() {
         <div className="panel__heading panel__heading--actions">
           <div>
             <h2>Últimas entrevistas</h2>
-            <p>Retome uma entrevista ou consulte um relatório já liberado.</p>
+            <p>Retome uma entrevista ou consulte um relatório já liberado. Clique nas colunas para classificar os registros recentes.</p>
           </div>
           <div className="button-row">
             <Link className="button button--primary" to="/entrevistas/nova">Nova entrevista</Link>
@@ -253,12 +268,15 @@ export function DashboardPage() {
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Modalidade</th>
-                  <th>Data</th>
-                  <th>Situação</th>
-                  <th>Nota</th>
-                  <th>Ação</th>
+                  {COLUNAS.map(({ campo, titulo }) => {
+                    const ativo = ordenacao.campo === campo
+                    return <th key={campo} scope="col" aria-sort={ativo ? ordenacao.direcao === 'asc' ? 'ascending' : 'descending' : 'none'}>
+                      <button type="button" onClick={() => ordenar(campo)} aria-label={`Ordenar por ${titulo}`}
+                        style={{ border: 0, background: 'transparent', padding: 0, color: 'inherit', font: 'inherit', fontWeight: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        {titulo} {ativo ? ordenacao.direcao === 'asc' ? '↑' : '↓' : '↕'}
+                      </button>
+                    </th>
+                  })}
                 </tr>
               </thead>
               <tbody>

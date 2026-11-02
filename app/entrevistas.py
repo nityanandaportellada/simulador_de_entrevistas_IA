@@ -1,4 +1,3 @@
-
 """Funções responsáveis pela criação e pelo controle das entrevistas."""
 
 import sqlite3
@@ -20,6 +19,22 @@ PERFIS_PERGUNTAS = {
     "senior": (0, 3, 5)
 }
 DIFICULDADES = ("basica", "intermediaria", "avancada")
+
+# Quantidade de perguntas da Geral e da subárea específica por perfil.
+# Cada tupla corresponde às dificuldades básica, intermediária e avançada.
+TECNICAS_GERAL = {
+    "estagio_trainee": (2, 1, 0),
+    "junior": (1, 2, 0),
+    "pleno": (0, 2, 1),
+    "senior": (0, 1, 2)
+}
+TECNICAS_ESPECIFICAS = {
+    "estagio_trainee": (3, 2, 0),
+    "junior": (2, 2, 1),
+    "pleno": (1, 2, 2),
+    "senior": (0, 2, 3)
+}
+META_PERGUNTAS_SUBAREA = {"basica": 6, "intermediaria": 6, "avancada": 6}
 
 STATUS_ENTREVISTA = (
     "em_andamento",
@@ -314,6 +329,25 @@ def _selecionar_perguntas(perguntas, perfil_profissional: str, comportamental: b
     return escolhidas
 
 
+def _selecionar_tecnicas_subarea(perguntas, perfil_profissional: str, subarea_geral_id: int, subarea_especifica_id: int):
+    """Seleciona três perguntas gerais e cinco específicas, respeitando o perfil."""
+    cotas = ((subarea_geral_id, TECNICAS_GERAL[perfil_profissional], "Geral"),
+             (subarea_especifica_id, TECNICAS_ESPECIFICAS[perfil_profissional], "específica"))
+    escolhidas = []
+    for subarea_id, distribuicao, origem in cotas:
+        for nivel, quantidade in zip(DIFICULDADES, distribuicao):
+            disponiveis = [p for p in perguntas if p["subarea_tecnica_id"] == subarea_id and p["dificuldade"] == nivel]
+            if len(disponiveis) < quantidade:
+                raise ValueError(
+                    f"Subárea {origem}: necessárias {quantidade} perguntas {nivel}, "
+                    f"mas existem apenas {len(disponiveis)} ativas. "
+                    "Complete o catálogo antes de iniciar a entrevista neste perfil."
+                )
+            escolhidas.extend(random.sample(disponiveis, quantidade))
+    random.shuffle(escolhidas)
+    return escolhidas
+
+
 def _selecionar_perguntas_lideranca(perguntas, perfil_profissional: str):
     """Escolhe oito perguntas de Liderança, uma de cada dimensão, conforme o perfil."""
     # O número final de cada código LID identifica a dimensão (01 a 08).
@@ -479,6 +513,8 @@ def criar_entrevista(
         nome_tipo = tipo["nome"].strip().casefold()
         if nome_tipo in ("liderança", "lideranca") and not bool(tipo["usa_area_tecnica"]):
             perguntas = _selecionar_perguntas_lideranca(perguntas, perfil_profissional)
+        elif bool(tipo["usa_area_tecnica"]) and subarea["id"] != subarea_geral["id"]:
+            perguntas = _selecionar_tecnicas_subarea(perguntas, perfil_profissional, subarea_geral["id"], subarea["id"])
         else:
             comportamental = nome_tipo == "comportamental"
             perguntas = _selecionar_perguntas(perguntas, perfil_profissional, comportamental)

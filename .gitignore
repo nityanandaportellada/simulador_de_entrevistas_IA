@@ -1,3 +1,4 @@
+
 # ============================================================
 # PYTHON
 # ============================================================
@@ -15,39 +16,63 @@ __pycache__/
 venv/
 env/
 
-# Cobertura de testes
+# Arquivos de cobertura
 .coverage
 htmlcov/
 
 # ============================================================
-# VARIÁVEIS DE AMBIENTE E SEGREDOS
+# CREDENCIAIS E VARIAVEIS DE AMBIENTE
 # ============================================================
 
 .env
 .env.*
+**/.env
+**/.env.*
+
+# Exemplos de configuracao podem ir ao GitHub
 !.env.example
 !**/.env.example
+
+# Chaves e certificados privados
+*.pem
+*.key
+*.p12
+*.pfx
 
 # ============================================================
 # BANCO DE DADOS SQLITE
 # ============================================================
 
+# O banco principal FAZ PARTE da entrega academica.
+# data/entrevistas.db deve permanecer versionado.
 
+# Arquivos temporarios criados pelo SQLite
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Backups temporarios (nao o banco principal)
+backup_*.db
+*_backup.db
+backup_*.sqlite
+backup_*.sqlite3
 
 # ============================================================
 # NODE / REACT / VITE
 # ============================================================
 
 node_modules/
-frontend/node_modules/
-
 dist/
-frontend/dist/
-
 *.tsbuildinfo
 
 # ============================================================
-# LOGS
+# LOGS E ARQUIVOS TEMPORARIOS
 # ============================================================
 
 *.log
@@ -57,10 +82,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# ============================================================
-# ARQUIVOS TEMPORÁRIOS E BACKUPS
-# ============================================================
-
 *.tmp
 *.temp
 *.bak
@@ -68,15 +89,11 @@ yarn-error.log*
 *~
 
 # ============================================================
-# EDITORES / IDE
+# EDITORES E SISTEMA OPERACIONAL
 # ============================================================
 
 .vscode/
 .idea/
-
-# ============================================================
-# SISTEMA OPERACIONAL
-# ============================================================
 
 .DS_Store
 Thumbs.db

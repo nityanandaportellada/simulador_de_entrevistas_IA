@@ -90,7 +90,7 @@ function Grafico({ serie }: { serie: PainelAdmin['serie'] }) {
   const maior = Math.max(1, ...grupos.map((item) => Math.max(item.iniciadas, item.avaliadas)))
   return <section className="panel" style={{ marginTop: 20 }}>
     <div className="panel__heading"><h2>Entrevistas ao longo do tempo</h2><p>Entrevistas iniciadas e avaliadas por intervalo.</p></div>
-    <p className="note"><span style={{ color: 'var(--blue)' }}>■</span> Iniciadas　<span style={{ color: 'var(--cyan)' }}>■</span> Avaliadas</p>
+    <p className="note"><span style={{ color: 'var(--blue)' }}>■</span> Iniciadas <span style={{ color: 'var(--cyan)' }}>■</span> Avaliadas</p>
     <div style={{ overflowX: 'auto' }}><div role="img" aria-label="Entrevistas por período" style={{ display: 'flex', alignItems: 'end', gap: 13, minWidth: 480, height: 225, borderBottom: '1px solid var(--border)' }}>
       {grupos.map((grupo) => <div key={grupo.rotulo} title={`${grupo.iniciadas} iniciadas; ${grupo.avaliadas} avaliadas`} style={{ flex: '1 0 0', display: 'grid', gridTemplateRows: '1fr auto', height: '100%', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'center', gap: 3, height: 185 }}>
